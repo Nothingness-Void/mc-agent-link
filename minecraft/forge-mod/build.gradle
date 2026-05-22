@@ -1,0 +1,112 @@
+plugins {
+    id 'eclipse'
+    id 'idea'
+    id 'maven-publish'
+    id 'net.minecraftforge.gradle' version '[6.0.16,6.2)'
+    id 'com.github.johnrengelman.shadow' version '8.1.1'
+}
+
+version = mod_version
+group = mod_group_id
+
+base {
+    archivesName = "agent-link-forge-${minecraft_version}"
+}
+
+java {
+    toolchain.languageVersion = JavaLanguageVersion.of(17)
+}
+
+minecraft {
+    mappings channel: mapping_channel, version: mapping_version
+
+    copyIdeResources = true
+
+    runs {
+        configureEach {
+            workingDirectory project.file('run')
+            property 'forge.logging.markers', 'REGISTRIES'
+            property 'forge.logging.console.level', 'debug'
+            mods {
+                "${mod_id}" {
+                    source sourceSets.main
+                }
+            }
+        }
+
+        client {
+            property 'forge.enabledGameTestNamespaces', mod_id
+        }
+
+        server {
+            property 'forge.enabledGameTestNamespaces', mod_id
+            args '--nogui'
+        }
+    }
+}
+
+sourceSets.main.resources { srcDir 'src/generated/resources' }
+
+repositories {
+    mavenCentral()
+}
+
+configurations {
+    shade
+    implementation.extendsFrom(shade)
+}
+
+dependencies {
+    minecraft "net.minecraftforge:forge:${minecraft_version}-${forge_version}"
+
+    // WebSocket server. Java-WebSocket is small, MIT, and works in any JVM.
+    shade 'org.java-websocket:Java-WebSocket:1.5.7'
+
+    // TOML config parser (Forge already ships nightconfig but keep dep explicit)
+    // implementation 'com.electronwill.night-config:toml:3.6.7'
+}
+
+shadowJar {
+    archiveClassifier = ''
+    configurations = [project.configurations.shade]
+
+    // Relocate to avoid clashing with mods that ship their own copy
+    relocate 'org.java_websocket', "${mod_group_id}.shadow.java_websocket"
+
+    finalizedBy 'reobfShadowJar'
+}
+
+reobf {
+    shadowJar {}
+}
+
+tasks.named('jar') {
+    enabled = false
+    finalizedBy 'shadowJar'
+}
+
+tasks.named('assemble') {
+    dependsOn 'shadowJar'
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.release = 17
+}
+
+processResources {
+    inputs.property "version", project.version
+
+    filesMatching(['META-INF/mods.toml', 'pack.mcmeta']) {
+        expand version: project.version,
+               minecraft_version: minecraft_version,
+               minecraft_version_range: minecraft_version_range,
+               forge_version_range: forge_version_range,
+               loader_version_range: loader_version_range,
+               mod_id: mod_id,
+               mod_name: mod_name,
+               mod_license: mod_license,
+               mod_authors: mod_authors,
+               mod_description: mod_description
+    }
+}

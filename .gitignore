@@ -1,0 +1,47 @@
+# OS junk
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDEs
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+.settings/
+.classpath
+.project
+
+# Java / Gradle
+build/
+.gradle/
+out/
+bin/
+*.class
+*.jar
+!gradle/wrapper/gradle-wrapper.jar
+hs_err_pid*
+replay_pid*
+
+# Forge / MC dev runs
+run/
+runs/
+runClient/
+runServer/
+runData/
+.minecraftForge/
+src/generated/
+
+# Node
+node_modules/
+dist/
+*.tsbuildinfo
+npm-debug.log*
+pnpm-debug.log*
+yarn-error.log*
+
+# env / local config
+.env
+.env.local
+agent-link-local.toml
