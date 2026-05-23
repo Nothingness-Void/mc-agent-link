@@ -60,10 +60,11 @@ dependencies {
     minecraft "net.minecraftforge:forge:${minecraft_version}-${forge_version}"
 
     // WebSocket server. Java-WebSocket is small, MIT, and works in any JVM.
-    shade 'org.java-websocket:Java-WebSocket:1.5.7'
-
-    // TOML config parser (Forge already ships nightconfig but keep dep explicit)
-    // implementation 'com.electronwill.night-config:toml:3.6.7'
+    // transitive=false so we don't drag slf4j-api into the shaded jar (Minecraft
+    // already exports it; bundling it triggers split-package errors with other mods).
+    shade('org.java-websocket:Java-WebSocket:1.5.7') {
+        transitive = false
+    }
 }
 
 shadowJar {

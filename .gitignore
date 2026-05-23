@@ -45,3 +45,6 @@ yarn-error.log*
 .env
 .env.local
 agent-link-local.toml
+
+# local one-off test scripts (not part of the project)
+smoke_test.py

@@ -20,6 +20,7 @@ public class AgentLinkMod {
 
     public AgentLinkMod() {
         AgentLinkConfig.load();
+        world.agentlink.logs.LogTap.install();
         MinecraftForge.EVENT_BUS.register(this);
     }
 

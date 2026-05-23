@@ -8,6 +8,7 @@ import world.agentlink.AgentLinkMod;
 import world.agentlink.dispatch.tools.BroadcastTool;
 import world.agentlink.dispatch.tools.GetPlayerInfoTool;
 import world.agentlink.dispatch.tools.GetRecentEventsTool;
+import world.agentlink.dispatch.tools.GetRecentLogsTool;
 import world.agentlink.dispatch.tools.GetServerStatsTool;
 import world.agentlink.dispatch.tools.ListOnlinePlayersTool;
 import world.agentlink.dispatch.tools.PingTool;
@@ -34,6 +35,7 @@ public class RequestDispatcher {
         register(new BroadcastTool(mc));
         register(new GetServerStatsTool(mc));
         register(new GetRecentEventsTool());
+        register(new GetRecentLogsTool());
         register(new SubscribeEventsTool());
         register(new UnsubscribeEventsTool());
     }
