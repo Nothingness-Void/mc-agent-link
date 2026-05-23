@@ -26,7 +26,7 @@ public class ListOnlinePlayersTool implements Tool {
             JsonObject o = new JsonObject();
             o.addProperty("name", p.getGameProfile().getName());
             o.addProperty("uuid", p.getUUID().toString());
-            o.addProperty("ping", p.connection.latency());
+            o.addProperty("ping", p.latency);
             o.addProperty("dim", p.level().dimension().location().toString());
             arr.add(o);
         }

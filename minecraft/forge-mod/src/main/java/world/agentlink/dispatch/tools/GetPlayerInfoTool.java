@@ -47,7 +47,7 @@ public class GetPlayerInfoTool implements Tool {
         r.addProperty("food", p.getFoodData().getFoodLevel());
         r.addProperty("xp_level", p.experienceLevel);
         r.addProperty("gamemode", p.gameMode.getGameModeForPlayer().getName());
-        r.addProperty("ping", p.connection.latency());
+        r.addProperty("ping", p.latency);
         return r;
     }
 }
