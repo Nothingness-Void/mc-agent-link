@@ -53,3 +53,7 @@ smoke_test.py
 # Release staging — built artifacts assembled for a GitHub release. Files here
 # are uploaded to the release; they don't live in the repo.
 release-staging/
+
+# Session handover — local-only working notes for the next Claude Code session.
+# Not for the team; lives only on this machine.
+HANDOVER.md
