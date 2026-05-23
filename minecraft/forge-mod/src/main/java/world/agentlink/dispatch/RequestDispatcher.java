@@ -10,11 +10,17 @@ import world.agentlink.dispatch.tools.GetPlayerInfoTool;
 import world.agentlink.dispatch.tools.GetRecentEventsTool;
 import world.agentlink.dispatch.tools.GetRecentLogsTool;
 import world.agentlink.dispatch.tools.GetServerStatsTool;
+import world.agentlink.dispatch.tools.ListDirTool;
+import world.agentlink.dispatch.tools.ListModsTool;
 import world.agentlink.dispatch.tools.ListOnlinePlayersTool;
 import world.agentlink.dispatch.tools.PingTool;
+import world.agentlink.dispatch.tools.ReadServerFileTool;
 import world.agentlink.dispatch.tools.RunConsoleCommandTool;
 import world.agentlink.dispatch.tools.SubscribeEventsTool;
+import world.agentlink.dispatch.tools.ThreadDumpTool;
+import world.agentlink.dispatch.tools.TickProfileTool;
 import world.agentlink.dispatch.tools.UnsubscribeEventsTool;
+import world.agentlink.dispatch.tools.WriteConfigFileTool;
 import world.agentlink.transport.ClientSession;
 
 import java.util.HashMap;
@@ -38,6 +44,12 @@ public class RequestDispatcher {
         register(new GetRecentLogsTool());
         register(new SubscribeEventsTool());
         register(new UnsubscribeEventsTool());
+        register(new ListModsTool(mc));
+        register(new ReadServerFileTool(mc));
+        register(new ListDirTool(mc));
+        register(new WriteConfigFileTool(mc));
+        register(new TickProfileTool(mc));
+        register(new ThreadDumpTool());
     }
 
     private void register(Tool tool) {

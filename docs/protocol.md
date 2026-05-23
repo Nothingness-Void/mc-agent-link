@@ -71,14 +71,21 @@ These MUST be implemented by any conforming server. Per-loader extensions live u
 | tool | args | result |
 |---|---|---|
 | `ping` | `{}` | `{"pong": true, "uptime_ms": 12345}` |
-| `run_console_command` | `{"command": "list"}` | `{"output": "There are 0 of a max..."}` |
-| `list_online_players` | `{}` | `{"players": [{"name":"Steve","uuid":"...","ping":42}]}` |
-| `get_player_info` | `{"name": "Steve"}` | `{"name", "uuid", "pos":[x,y,z], "dim", "health", "food", "gamemode", "ping"}` |
-| `broadcast` | `{"message": "hi all", "color": "yellow"}` | `{"sent": true}` |
-| `get_server_stats` | `{}` | `{"tps_1m":19.97,"mspt":12.4,"mem_used_mb":4096,"mem_max_mb":16384,"loaded_chunks":1234,"online":3}` |
-| `get_recent_events` | `{"since_seq":0,"limit":50,"topics":["chat",...]}` | `{"events":[{"seq":N,"ts":...,"topic":"chat","data":{...}}], "head_seq":N, "oldest_seq":1, "buffer_capacity":1024, "truncated":false}` |
+| `run_console_command` | `{"command": "list"}` | `{"return_value": 1, "output": "There are 0 of a max..."}` |
+| `list_online_players` | `{}` | `{"players":[{"name":"Steve","uuid":"...","ping":42,"dim":"minecraft:overworld"}], "count":1}` |
+| `get_player_info` | `{"name": "Steve"}` | `{"name","uuid","pos":[x,y,z],"dim","yaw","pitch","health","max_health","food","xp_level","gamemode","ping"}` |
+| `broadcast` | `{"message": "hi all", "color": "yellow"}` | `{"sent": true, "recipients": 3}` |
+| `get_server_stats` | `{}` | `{"tps":19.97,"mspt":12.4,"mem_used_mb":4096,"mem_max_mb":16384,"loaded_chunks":1234,"online":3,"max_players":20}` |
+| `get_recent_events` | `{"since_seq":0,"limit":50,"topics":["chat",...]}` | `{"events":[{"seq":N,"ts":...,"topic":"chat","data":{...}}], "returned":N, "head_seq":N, "oldest_seq":1, "buffer_capacity":1024, "truncated":false}` |
+| `get_recent_logs` | `{"since_seq":0,"limit":100,"levels":["WARN","ERROR"],"contains":"foo"}` | `{"logs":[{"seq":N,"ts":...,"level":"INFO","logger":"...","message":"..."}], "returned":N, "head_seq":N, "oldest_seq":1, "buffer_capacity":2048, "truncated":false}` |
 | `subscribe_events` | `{"topics":["chat","player_join","player_leave","player_death"]}` | `{"subscribed":["chat","player_join",...]}` |
 | `unsubscribe_events` | `{"topics":["chat"]}` | `{"unsubscribed":["chat"]}` |
+| `list_mods` | `{}` | `{"mods":[{"mod_id","display_name","version","description"}], "count":N, "loader":"forge"}` |
+| `read_server_file` | `{"path":"crash-reports/foo.txt","offset":0,"max_bytes":262144}` | `{"path","size","offset","bytes_read","truncated","encoding":"utf-8"|"base64","content"}` |
+| `list_dir` | `{"path":"config","max_entries":500}` | `{"path","entries":[{"name","is_dir","size","mtime_ms"}], "returned":N, "total":N, "truncated":false}` |
+| `write_config_file` | `{"path":"config/foo.toml","content":"...","overwrite":false,"encoding":"utf-8"}` | `{"path","bytes_written","created":true,"backup":"config/.agent-link-backup/..."}` |
+| `tick_profile` | `{}` | `{"samples":100,"avg_mspt":12.4,"max_mspt":48.9,"p50_mspt":11.0,"p95_mspt":22.0,"p99_mspt":40.0,"tps":19.97,"window_ticks":100}` |
+| `thread_dump` | `{"max_frames":30,"only_server":false}` | `{"threads":[{"id","name","state","lock?","lock_owner?","stack":[...],"stack_truncated"}], "count":N}` |
 
 ### Pull vs push
 
@@ -93,10 +100,20 @@ For incremental polling pass the previous response's `head_seq` as `since_seq` n
 | topic | data shape |
 |---|---|
 | `chat` | `{"player","uuid","message"}` |
-| `player_join` | `{"player","uuid","ip"}` |
+| `player_join` | `{"player","uuid","address"}` |
 | `player_leave` | `{"player","uuid"}` |
 | `player_death` | `{"player","uuid","cause","killer"}` |
-| `server_log` | `{"level","logger","message"}` (optional, opt-in via `subscribe_events`) |
+
+## Filesystem sandbox
+
+`read_server_file` and `list_dir` accept any path under the server root (defined as `MinecraftServer#getServerDirectory`). `write_config_file` is the only write tool: it accepts paths under `config/` only and rejects everything else. Path traversal (`..`) and absolute paths are rejected by all three.
+
+- Reads are capped at 4 MiB per call (default 256 KiB). Binary files are returned base64-encoded.
+- Writes are capped at 4 MiB and are atomic (write to `*.agent-link.tmp`, rename onto target).
+- Existing files are auto-backed-up to `config/.agent-link-backup/<name>.<timestamp>.bak` before being overwritten.
+- Successful writes are mirrored to the server log (`agent-link: wrote …`) for human audit.
+- The `config/.agent-link-backup/` directory itself is never writable — restore manually if needed.
+- Deletes, moves, and renames are intentionally not exposed; use `run_console_command` if the operating system level is required.
 
 ## Error codes
 

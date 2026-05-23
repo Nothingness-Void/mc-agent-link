@@ -45,6 +45,7 @@ yarn-error.log*
 .env
 .env.local
 agent-link-local.toml
+.claude/settings.local.json
 
 # local one-off test scripts (not part of the project)
 smoke_test.py

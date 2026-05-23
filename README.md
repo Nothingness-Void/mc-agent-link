@@ -2,9 +2,9 @@
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
-Lets AI agents (via the [Model Context Protocol](https://modelcontextprotocol.io)) connect to a running Minecraft server. Run commands, query players, stream events — anything an op could do, an agent can do.
+Lets AI agents (via the [Model Context Protocol](https://modelcontextprotocol.io)) connect to a running Minecraft server. Run commands, query players, stream events, read mods/configs/crash-reports, profile tick spikes, and tune `config/*` files — anything an op could do at the console, an agent can do.
 
-> **Status:** early scaffolding. Forge 1.20.1 server-side first. NeoForge / Fabric / Paper planned.
+> **Status:** early. Forge 1.20.1 server-side first. NeoForge / Fabric / Paper planned.
 
 ## Why
 
@@ -28,6 +28,7 @@ Modern AI agents (Claude Code, Cursor, custom agents) speak MCP. Minecraft serve
 
 ```
 mc-agent-link/
+├── .claude/skills/           # Claude Code slash commands (mc-overview, mc-diagnose, mc-crash, mc-health-check)
 ├── docs/
 │   └── protocol.md            # agent-link wire protocol spec
 ├── minecraft/
