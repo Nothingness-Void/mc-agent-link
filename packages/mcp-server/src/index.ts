@@ -501,7 +501,7 @@ every turn.
 `.trim();
 
 const server = new Server(
-  { name: "agent-link", version: "0.1.0-alpha" },
+  { name: "agent-link", version: "0.1.1-alpha" },
   { capabilities: { tools: {} }, instructions: INSTRUCTIONS },
 );
 
