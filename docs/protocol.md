@@ -76,8 +76,17 @@ These MUST be implemented by any conforming server. Per-loader extensions live u
 | `get_player_info` | `{"name": "Steve"}` | `{"name", "uuid", "pos":[x,y,z], "dim", "health", "food", "gamemode", "ping"}` |
 | `broadcast` | `{"message": "hi all", "color": "yellow"}` | `{"sent": true}` |
 | `get_server_stats` | `{}` | `{"tps_1m":19.97,"mspt":12.4,"mem_used_mb":4096,"mem_max_mb":16384,"loaded_chunks":1234,"online":3}` |
+| `get_recent_events` | `{"since_seq":0,"limit":50,"topics":["chat",...]}` | `{"events":[{"seq":N,"ts":...,"topic":"chat","data":{...}}], "head_seq":N, "oldest_seq":1, "buffer_capacity":1024, "truncated":false}` |
 | `subscribe_events` | `{"topics":["chat","player_join","player_leave","player_death"]}` | `{"subscribed":["chat","player_join",...]}` |
 | `unsubscribe_events` | `{"topics":["chat"]}` | `{"unsubscribed":["chat"]}` |
+
+### Pull vs push
+
+The default and recommended consumption mode is **pull**: every event is appended to a server-side ring buffer (1024 entries) and agents call `get_recent_events` when they want to know what's been happening. This way the LLM only spends tokens on events the agent explicitly requested.
+
+For incremental polling pass the previous response's `head_seq` as `since_seq` next time. Events older than `oldest_seq` have been evicted from the buffer.
+
+`subscribe_events` (push) is retained for advanced clients that want a real-time stream — e.g. a moderation bot reacting to chat. Push and pull share the same buffer, so subscribing does not disable the pull path.
 
 ## Event topics (v0)
 

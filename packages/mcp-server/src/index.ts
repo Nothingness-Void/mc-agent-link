@@ -106,6 +106,43 @@ const TOOLS: ToolDef[] = [
     },
     toAgentLink: () => ({ tool: "get_server_stats", args: {} }),
   },
+  {
+    spec: {
+      name: "get_recent_events",
+      description:
+        "Pull recent server events (chat, joins, leaves, deaths) on demand. " +
+        "Use this when the user asks what's been happening on the server. " +
+        "Default returns up to 50 most recent events. Pass `since_seq` to fetch only new events since a previous call's `head_seq`. " +
+        "Pass `topics` to filter (e.g. just chat). The mod buffers ~1024 events; older ones are dropped.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          since_seq: {
+            type: "number",
+            description:
+              "Only return events with seq > this value. Use the previous call's head_seq for incremental polling. Omit or 0 to get the tail of recent events.",
+          },
+          limit: {
+            type: "number",
+            description: "Max events to return (default 50, hard cap 200).",
+          },
+          topics: {
+            type: "array",
+            items: { type: "string", enum: ["chat", "player_join", "player_leave", "player_death"] },
+            description: "Optional filter. Omit to receive all topics.",
+          },
+        },
+        additionalProperties: false,
+      },
+    },
+    toAgentLink: (a) => {
+      const args: Record<string, unknown> = {};
+      if (typeof a.since_seq === "number") args.since_seq = a.since_seq;
+      if (typeof a.limit === "number") args.limit = a.limit;
+      if (Array.isArray(a.topics)) args.topics = a.topics;
+      return { tool: "get_recent_events", args };
+    },
+  },
 ];
 
 const TOOL_BY_NAME = new Map(TOOLS.map((t) => [t.spec.name, t]));
