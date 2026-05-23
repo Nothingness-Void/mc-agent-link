@@ -18,10 +18,10 @@ If MCP isn't connected, say so and stop.
 Call in one round:
 
 - `tick_profile`
-- `thread_dump` with `only_server: true`, `max_frames: 30`
+- `thread_dump` with `only_server: true`, `max_frames: 30` (30 balances detail vs. noise; raise to 60 if the top frames are all Minecraft internals like `MinecraftServer.tickChildren` and you can't see the responsible mod)
 - `get_recent_logs` with `levels: ["WARN", "ERROR"]`, `limit: 50`
 
-Decision tree from `tick_profile`:
+Decision tree from `tick_profile`. The 50 ms threshold is the vanilla-tick budget; calibrate up for heavy modpacks (with many mods loaded, ~45 ms avg is often the steady-state baseline, not a problem).
 
 - **avg ≤ 50 ms, p99 ≤ 50 ms** → server isn't actually lagging. Tell the user what you see and ask whether the lag was player-perceived (network/render) vs. server (TPS).
 - **avg > 50 ms** → steady-state overload. Likely a mod doing too much per tick, or memory pressure. Continue.
@@ -34,9 +34,9 @@ From `thread_dump` (`Server thread`): note the top 3-5 frames. If you can alread
 Try `run_console_command { command: "spark profiler --help" }`.
 
 - **Returns help text** → spark is installed.
-  1. Tell the user: "I'll run a 30s spark sample. The server will be under tiny extra load."
+  1. Tell the user: "I'll start a 30s spark sample now and check back after — please wait." Do not spin-call tools while waiting.
   2. `run_console_command { command: "spark profiler start" }`
-  3. Wait ~30s (tell the user you're waiting; don't spin-call tools).
+  3. Stop the sample on the user's next message, or — if you have a delay/sleep tool — after ~30s. If you don't and the user hasn't replied, ask them to ping you when they want results.
   4. `run_console_command { command: "spark profiler stop" }`
   5. The output usually contains a URL (e.g. `https://spark.lucko.me/<id>`). Surface it to the user.
   6. Optionally `list_dir { path: "spark" }` and `read_server_file` on the newest dump if they want offline analysis.
@@ -45,7 +45,7 @@ Try `run_console_command { command: "spark profiler --help" }`.
 ## Phase 3 — Attribute and recommend
 
 1. `list_mods` (call once; cache for the rest of the conversation).
-2. Map the hot package(s) to a mod id from step 1. The mod id usually matches the top-level package.
+2. Map the hot package(s) to a mod id from step 1. The top-level package is a hint, not proof — mods can shade or relocate packages. Confirm by reading the mod's metadata: `read_server_file` on `META-INF/mods.toml` (Forge/NeoForge), `fabric.mod.json` (Fabric), or `mcmod.info` (legacy) inside the jar listing from `list_mods`, and match the package against the declared mod id.
 3. `list_dir { path: "config" }` to see what config files exist for that mod, then `read_server_file` on the most likely candidate (`config/<modid>.toml`, `config/<modid>-common.toml`, etc.).
 4. Identify a setting that plausibly relates (entity tick rate, async generation, mob caps, etc.).
 
@@ -73,4 +73,6 @@ Then ask: "want me to apply that? I'll back up the current file first."
 - **Never** run `stop`, `/op`, `/deop`, `/ban`, `/whitelist`, world-mutating commands (`/fill`, `/kill @e`) without an explicit, specific user request.
 - **Never** restart the server on your own.
 - **Never** broadcast to players unless the user asks.
+- **Never** disable, remove, or suggest removing a mod without explicit user confirmation. Weaker models: do NOT assume the user wants a mod removed just because it caused a crash — always present options and wait for a clear "yes" before any destructive suggestion becomes an action.
 - If `write_config_file` returns `INVALID_ARGS`, the path was outside `config/`. Don't try to bypass — explain to the user.
+- If `write_config_file` fails for another reason: `PERMISSION_DENIED` or file-locked usually means the server is holding the file (suggest the user stop or reload the server first); a TOML/parse error means the proposed value is malformed (re-read the original file, fix the syntax, and retry). Report the error to the user instead of retrying blindly.

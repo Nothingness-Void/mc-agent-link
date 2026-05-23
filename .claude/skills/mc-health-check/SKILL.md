@@ -15,11 +15,11 @@ If those tools aren't visible, the MCP server isn't connected — tell the user 
 
 ## Procedure
 
-1. **Parallel**: `ping`, `get_server_stats`, `list_mods`.
+1. **Parallel**: `ping`, `get_server_stats`, `list_mods`. If one or two of these fail or time out, still report the ones that succeeded and note which failed with the error message — don't abort the whole check.
 2. Compose a short status block:
-   - **Connection**: ✓ if `ping.pong === true`. Include uptime in human form (ms → seconds/minutes/hours/days).
+   - **Connection**: ✓ if `ping.pong === true`. Include ping RTT (ms) and uptime in human form (ms → seconds/minutes/hours/days).
    - **Server**: TPS, mspt, online/max, loaded chunks, memory.
-   - **Mods**: count, loader. Mention if `agentlink` itself is in the list (sanity check).
+   - **Mods**: count, loader. Mention if `agentlink` itself is in the list (sanity check). Flag a count that looks off (e.g. unexpectedly high suggests a modpack rather than vanilla+plugins).
 3. If anything looks wrong (TPS missing, ping failed, mod count zero), say so and suggest the next move (re-check MCP config, restart server, etc.).
 
 Keep the whole reply under 10 lines. This is a *check*, not a report — if the user wants more, they'll run `/mc-overview` or `/mc-diagnose`.
@@ -27,4 +27,5 @@ Keep the whole reply under 10 lines. This is a *check*, not a report — if the 
 ## Don't
 
 - Don't run any state-changing tool (`broadcast`, `run_console_command`, `write_config_file`) here. Health check is read-only.
+- Don't expand scope to other read-only tools either (`get_recent_events`, `get_recent_logs`, etc.) — this skill is intentionally limited to the three tools above. If the user wants more, they'll run `/mc-overview` or `/mc-diagnose`.
 - Don't dump the full mod list — count is enough.

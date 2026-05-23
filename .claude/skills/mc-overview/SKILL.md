@@ -20,20 +20,21 @@ These come from the `agent-link` MCP server. If they aren't available, tell the 
 
 ## Procedure
 
-1. **Call all six tools in parallel.** They are independent. One round.
-2. Compose a short report (under ~150 words) with sections:
+1. **Call all six tools in parallel.** They are independent. One round. If any tool errors or times out, do not retry — continue with the rest, and in the report note which tool(s) failed so the user knows the snapshot is degraded.
+2. Compose a concise report — keep it short, but don't drop critical info when multiple issues co-exist. Sections:
    - **Health**: TPS, avg/p95/p99 mspt, mem used / max, loaded chunks. Flag anything that looks off (TPS < 19.5, p99 > 50 ms, mem > 90% of max).
    - **Players**: count + names. If 0, say "no one online".
-   - **Recent activity**: 1-2 sentences summarizing chat / joins / leaves / deaths from `get_recent_events`. Mention `head_seq` so the user can ask for incremental updates later.
+   - **Recent activity**: 1-2 sentences summarizing chat / joins / leaves / deaths from `get_recent_events`. Surface `head_seq` (the latest event sequence number) so the user can poll incrementally for new events later.
    - **Recent issues**: if WARN/ERROR logs exist, summarize the top 1-2 patterns (don't dump raw lines). If clean, say "no warnings or errors in buffer".
    - **Mods**: count + loader. Don't list them all — only call out ones that look unusual or relevant if there's a recent error.
-3. End with **one** suggested next step appropriate to what you found:
-   - p99 high or errors present → "want me to run `/mc-diagnose`?"
+3. End with **one** suggested next step appropriate to what you found. If multiple conditions match, pick the highest-priority one in this order:
    - crash reports recently created → "want me to run `/mc-crash`?"
+   - p99 high or errors present → "want me to run `/mc-diagnose`?"
    - everything clean → "looks healthy. anything specific?"
 
 ## Style
 
 - No tool-call narration. The user sees the summary, not the JSON.
 - Numbers, not adjectives: "TPS 19.97, p99 18ms" beats "TPS is good".
+- For timestamps from events/logs, render in the user's local timezone if known; otherwise use UTC and label it (e.g. "14:02 UTC").
 - Don't paginate or offer follow-ups beyond the one suggested next step.
