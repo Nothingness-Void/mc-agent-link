@@ -49,3 +49,7 @@ agent-link-local.toml
 
 # local one-off test scripts (not part of the project)
 smoke_test.py
+
+# Release staging — built artifacts assembled for a GitHub release. Files here
+# are uploaded to the release; they don't live in the repo.
+release-staging/

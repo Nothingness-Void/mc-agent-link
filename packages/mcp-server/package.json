@@ -1,6 +1,6 @@
 {
   "name": "agent-link-mcp-server",
-  "version": "0.1.0",
+  "version": "0.1.0-alpha",
   "private": true,
   "description": "MCP bridge that exposes a running mc-agent-link Minecraft server as MCP tools.",
   "license": "Apache-2.0",
@@ -9,6 +9,10 @@
     "agent-link-mcp": "dist/index.js"
   },
   "main": "dist/index.js",
+  "files": [
+    "dist/",
+    "README.md"
+  ],
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",

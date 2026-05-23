@@ -75,7 +75,7 @@ public final class AgentLinkConfig {
                     " Default: [] (nothing extra denied).");
 
             cfg.save();
-            CURRENT = new Snapshot(port, allowRemote, token, writeAllow, writeDeny, "0.1.0");
+            CURRENT = new Snapshot(port, allowRemote, token, writeAllow, writeDeny, "0.1.0-alpha");
 
             if (fresh) {
                 AgentLinkMod.LOG.info("agent-link wrote default config to {}", path);
