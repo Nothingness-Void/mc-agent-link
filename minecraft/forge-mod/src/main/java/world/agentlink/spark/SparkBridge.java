@@ -219,6 +219,13 @@ public final class SparkBridge {
         return r;
     }
 
+    // Spark's API methods return objects whose runtime classes are package-private
+    // anonymous inner classes (e.g. SparkApi$4 implementing DoubleStatistic<TicksPerSecond>).
+    // Looking up methods on stat.getClass() finds the erased poll(TicksPerSecond) /
+    // bridge poll(Object), neither of which matches getMethod("poll", StatisticWindow.class).
+    // Always look up methods on the public API interface instead — for DoubleStatistic
+    // its erasure is poll(StatisticWindow), which matches.
+
     /**
      * For a {@code DoubleStatistic<W>} where W is the StatisticWindow enum
      * named {@code windowEnumName}, returns a JSON object keyed by window name
@@ -226,15 +233,20 @@ public final class SparkBridge {
      */
     private static JsonObject readDoubleStatistic(Object stat, String windowEnumName) throws ReflectiveOperationException {
         JsonObject out = new JsonObject();
-        Class<?> windowClass = Class.forName("me.lucko.spark.api.statistic.StatisticWindow$" + windowEnumName);
-        Object[] windows = windowClass.getEnumConstants();
-        for (Object w : windows) {
+        ClassLoader cl = stat.getClass().getClassLoader();
+        Class<?> windowEnumClass = Class.forName("me.lucko.spark.api.statistic.StatisticWindow$" + windowEnumName, true, cl);
+        Class<?> windowBase = Class.forName("me.lucko.spark.api.statistic.StatisticWindow", true, cl);
+        Class<?> doubleStatistic = Class.forName("me.lucko.spark.api.statistic.types.DoubleStatistic", true, cl);
+        java.lang.reflect.Method pollMethod = doubleStatistic.getMethod("poll", windowBase);
+        pollMethod.setAccessible(true);
+
+        for (Object w : windowEnumClass.getEnumConstants()) {
             String name = ((Enum<?>) w).name().toLowerCase();
             try {
-                Object value = stat.getClass().getMethod("poll", Class.forName("me.lucko.spark.api.statistic.StatisticWindow")).invoke(stat, w);
+                Object value = pollMethod.invoke(stat, w);
                 out.addProperty(name, ((Number) value).doubleValue());
             } catch (Throwable t) {
-                out.addProperty(name + "_error", t.getClass().getSimpleName());
+                out.addProperty(name + "_error", reflectionMessage(t));
             }
         }
         return out;
@@ -243,23 +255,37 @@ public final class SparkBridge {
     /** GenericStatistic is the same idea but each window returns a structured value (DoubleAverageInfo). */
     private static JsonObject readGenericStatistic(Object stat, String windowEnumName) throws ReflectiveOperationException {
         JsonObject out = new JsonObject();
-        Class<?> windowClass = Class.forName("me.lucko.spark.api.statistic.StatisticWindow$" + windowEnumName);
-        Object[] windows = windowClass.getEnumConstants();
-        for (Object w : windows) {
+        ClassLoader cl = stat.getClass().getClassLoader();
+        Class<?> windowEnumClass = Class.forName("me.lucko.spark.api.statistic.StatisticWindow$" + windowEnumName, true, cl);
+        Class<?> windowBase = Class.forName("me.lucko.spark.api.statistic.StatisticWindow", true, cl);
+        Class<?> genericStatistic = Class.forName("me.lucko.spark.api.statistic.types.GenericStatistic", true, cl);
+        java.lang.reflect.Method pollMethod = genericStatistic.getMethod("poll", windowBase);
+        pollMethod.setAccessible(true);
+
+        Class<?> averageInfo = Class.forName("me.lucko.spark.api.statistic.misc.DoubleAverageInfo", true, cl);
+        java.lang.reflect.Method mean = averageInfo.getMethod("mean");
+        java.lang.reflect.Method max = averageInfo.getMethod("max");
+        java.lang.reflect.Method min = averageInfo.getMethod("min");
+        java.lang.reflect.Method median = averageInfo.getMethod("median");
+        java.lang.reflect.Method p95 = averageInfo.getMethod("percentile95th");
+        for (java.lang.reflect.Method m : new java.lang.reflect.Method[]{mean, max, min, median, p95}) {
+            m.setAccessible(true);
+        }
+
+        for (Object w : windowEnumClass.getEnumConstants()) {
             String name = ((Enum<?>) w).name().toLowerCase();
             try {
-                Object info = stat.getClass().getMethod("poll", Class.forName("me.lucko.spark.api.statistic.StatisticWindow")).invoke(stat, w);
+                Object info = pollMethod.invoke(stat, w);
                 JsonObject obj = new JsonObject();
-                Class<?> infoClass = info.getClass();
-                obj.addProperty("mean", ((Number) callIfPresent(info, infoClass, "mean")).doubleValue());
-                obj.addProperty("max", ((Number) callIfPresent(info, infoClass, "max")).doubleValue());
-                obj.addProperty("min", ((Number) callIfPresent(info, infoClass, "min")).doubleValue());
-                obj.addProperty("median", ((Number) callIfPresent(info, infoClass, "median")).doubleValue());
-                obj.addProperty("p95", ((Number) callIfPresent(info, infoClass, "percentile95th")).doubleValue());
+                obj.addProperty("mean", ((Number) mean.invoke(info)).doubleValue());
+                obj.addProperty("max", ((Number) max.invoke(info)).doubleValue());
+                obj.addProperty("min", ((Number) min.invoke(info)).doubleValue());
+                obj.addProperty("median", ((Number) median.invoke(info)).doubleValue());
+                obj.addProperty("p95", ((Number) p95.invoke(info)).doubleValue());
                 out.add(name, obj);
             } catch (Throwable t) {
                 JsonObject err = new JsonObject();
-                err.addProperty("error", t.getClass().getSimpleName() + ": " + t.getMessage());
+                err.addProperty("error", reflectionMessage(t));
                 out.add(name, err);
             }
         }
@@ -268,26 +294,41 @@ public final class SparkBridge {
 
     private static JsonObject readGcStats(Object gcMap) throws ReflectiveOperationException {
         JsonObject out = new JsonObject();
-        if (!(gcMap instanceof java.util.Map<?, ?> map)) return out;
+        if (!(gcMap instanceof java.util.Map<?, ?> map) || map.isEmpty()) return out;
+
+        Object sample = map.values().iterator().next();
+        ClassLoader cl = sample.getClass().getClassLoader();
+        Class<?> gcIface = Class.forName("me.lucko.spark.api.gc.GarbageCollector", true, cl);
+        java.lang.reflect.Method totalCollections = gcIface.getMethod("totalCollections");
+        java.lang.reflect.Method totalTime = gcIface.getMethod("totalTime");
+        java.lang.reflect.Method avgTime = gcIface.getMethod("avgTime");
+        java.lang.reflect.Method avgFreq = gcIface.getMethod("avgFrequency");
+        for (java.lang.reflect.Method m : new java.lang.reflect.Method[]{totalCollections, totalTime, avgTime, avgFreq}) {
+            m.setAccessible(true);
+        }
+
         for (java.util.Map.Entry<?, ?> e : map.entrySet()) {
             String name = String.valueOf(e.getKey());
             Object stat = e.getValue();
             JsonObject info = new JsonObject();
             try {
-                info.addProperty("total_collections", ((Number) callIfPresent(stat, stat.getClass(), "totalCollections")).longValue());
-                info.addProperty("total_time_ms", ((Number) callIfPresent(stat, stat.getClass(), "totalTime")).longValue());
-                info.addProperty("avg_time_ms", ((Number) callIfPresent(stat, stat.getClass(), "avgTime")).doubleValue());
-                info.addProperty("avg_freq_ms", ((Number) callIfPresent(stat, stat.getClass(), "avgFrequency")).doubleValue());
+                info.addProperty("total_collections", ((Number) totalCollections.invoke(stat)).longValue());
+                info.addProperty("total_time_ms", ((Number) totalTime.invoke(stat)).longValue());
+                info.addProperty("avg_time_ms", ((Number) avgTime.invoke(stat)).doubleValue());
+                info.addProperty("avg_freq_ms", ((Number) avgFreq.invoke(stat)).doubleValue());
             } catch (Throwable t) {
-                info.addProperty("error", t.getClass().getSimpleName());
+                info.addProperty("error", reflectionMessage(t));
             }
             out.add(name, info);
         }
         return out;
     }
 
-    private static Object callIfPresent(Object target, Class<?> cls, String method) throws ReflectiveOperationException {
-        return cls.getMethod(method).invoke(target);
+    private static String reflectionMessage(Throwable t) {
+        Throwable root = t;
+        while (root.getCause() != null && root.getCause() != root) root = root.getCause();
+        String msg = root.getMessage();
+        return root.getClass().getSimpleName() + (msg == null ? "" : ": " + msg);
     }
 
     private static void recordReflectionError(JsonObject r, String key, Throwable t) {
