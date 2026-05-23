@@ -9,7 +9,7 @@ Goal: identify **what** is causing tick spikes and **which mod** is responsible,
 
 ## Required tools
 
-From the `agent-link` MCP server: `tick_profile`, `thread_dump`, `list_mods`, `get_recent_logs`, `run_console_command`, `read_server_file`, `list_dir`, `write_config_file`.
+From the `agent-link` MCP server: `tick_profile`, `thread_dump`, `list_mods`, `get_recent_logs`, `run_console_command`, `read_server_file`, `list_dir`, `write_config_file`, `spark_status`, `spark_stats`, `spark_profiler_start`, `spark_profiler_stop`, `spark_profiler_cancel`, `spark_health_report`.
 
 If MCP isn't connected, say so and stop.
 
@@ -20,6 +20,7 @@ Call in one round:
 - `tick_profile`
 - `thread_dump` with `only_server: true`, `max_frames: 30`
 - `get_recent_logs` with `levels: ["WARN", "ERROR"]`, `limit: 50`
+- `spark_status` (cheap, never errors — tells you whether to use spark in Phase 2)
 
 Decision tree from `tick_profile`:
 
@@ -27,20 +28,24 @@ Decision tree from `tick_profile`:
 - **avg > 50 ms** → steady-state overload. Likely a mod doing too much per tick, or memory pressure. Continue.
 - **avg fine, p99 ≫ avg** → spikes. Something fires occasionally and stalls a tick. Continue.
 
+If `spark_status` shows spark is installed, also call `spark_stats` for richer multi-window TPS/MSPT/CPU/GC data — read-only, very cheap.
+
 From `thread_dump` (`Server thread`): note the top 3-5 frames. If you can already attribute to a mod's package (e.g. `com.foo.bar.SomeMod.onTick`), you have a hypothesis.
 
 ## Phase 2 — Sample with spark if available
 
-Try `run_console_command { command: "spark profiler --help" }`.
+If `spark_status` from Phase 1 reported `installed: true`:
 
-- **Returns help text** → spark is installed.
-  1. Tell the user: "I'll run a 30s spark sample. The server will be under tiny extra load."
-  2. `run_console_command { command: "spark profiler start" }`
-  3. Wait ~30s (tell the user you're waiting; don't spin-call tools).
-  4. `run_console_command { command: "spark profiler stop" }`
-  5. The output usually contains a URL (e.g. `https://spark.lucko.me/<id>`). Surface it to the user.
-  6. Optionally `list_dir { path: "spark" }` and `read_server_file` on the newest dump if they want offline analysis.
-- **Returns "Unknown command"** → no spark. Continue with thread_dump evidence only and mention spark as an optional install.
+1. Tell the user: "Starting a 30s spark sample. I'll auto-stop and bring back the URL."
+2. `spark_profiler_start { timeout: 30 }` — `timeout` makes spark auto-stop and upload, so you don't need to spin-poll.
+3. After ~30s (or on the user's next message), call `spark_profiler_stop { wait_url_ms: 15000 }`. If spark already auto-stopped, this still retrieves the URL. The response includes `url` when the upload landed.
+4. Surface the URL to the user. If `url_present: false`, the upload is still in flight — try `spark_profiler_stop` again with a larger `wait_url_ms`, or read `spark/` via `list_dir` + `read_server_file`.
+5. For spike-only sampling, prefer `spark_profiler_start { timeout: 60, only_ticks_over_ms: 50 }` — much shorter, higher signal.
+6. Use `spark_profiler_cancel` to abort a sample without uploading.
+
+For a quick TPS/CPU/memory snapshot without a full sample, `spark_health_report` returns a one-shot URL.
+
+If spark is not installed, tell the user spark would give better data and continue with `thread_dump` evidence only.
 
 ## Phase 3 — Attribute and recommend
 

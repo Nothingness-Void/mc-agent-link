@@ -16,6 +16,12 @@ import world.agentlink.dispatch.tools.ListOnlinePlayersTool;
 import world.agentlink.dispatch.tools.PingTool;
 import world.agentlink.dispatch.tools.ReadServerFileTool;
 import world.agentlink.dispatch.tools.RunConsoleCommandTool;
+import world.agentlink.dispatch.tools.SparkHealthReportTool;
+import world.agentlink.dispatch.tools.SparkProfilerCancelTool;
+import world.agentlink.dispatch.tools.SparkProfilerStartTool;
+import world.agentlink.dispatch.tools.SparkProfilerStopTool;
+import world.agentlink.dispatch.tools.SparkStatsTool;
+import world.agentlink.dispatch.tools.SparkStatusTool;
 import world.agentlink.dispatch.tools.SubscribeEventsTool;
 import world.agentlink.dispatch.tools.ThreadDumpTool;
 import world.agentlink.dispatch.tools.TickProfileTool;
@@ -50,6 +56,12 @@ public class RequestDispatcher {
         register(new WriteConfigFileTool(mc));
         register(new TickProfileTool(mc));
         register(new ThreadDumpTool());
+        register(new SparkStatusTool(mc));
+        register(new SparkStatsTool());
+        register(new SparkProfilerStartTool(mc));
+        register(new SparkProfilerStopTool(mc));
+        register(new SparkProfilerCancelTool(mc));
+        register(new SparkHealthReportTool(mc));
     }
 
     private void register(Tool tool) {

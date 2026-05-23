@@ -65,6 +65,13 @@ Diagnosis & remote management:
 - `tick_profile` — full tick distribution (avg / p50 / p95 / p99 / max mspt)
 - `thread_dump` — JVM thread dump with state and stack frames
 
+Spark integration (only useful when the [spark](https://spark.lucko.me) mod is installed):
+
+- `spark_status` — probe spark; always succeeds. Call this first.
+- `spark_stats` — multi-window TPS / MSPT / CPU / GC from the spark Java API
+- `spark_profiler_start` / `spark_profiler_stop` / `spark_profiler_cancel` — sample CPU; `_stop` returns the viewer URL
+- `spark_health_report` — `/spark health --upload`, returns a shareable URL
+
 ### Why pull, not push
 
 The MCP bridge intentionally does not expose `subscribe_events` / `unsubscribe_events`. Push subscriptions exist in the agent-link protocol for non-MCP clients (a moderation bot, a dashboard), but for an LLM agent, pulling on demand keeps token spend bounded — the agent only pays for events it asked for.
@@ -75,7 +82,7 @@ A typical cycle for "the server feels laggy":
 
 1. `tick_profile` — is the avg fine but p99 bad?
 2. `thread_dump` — what was `Server thread` doing when sampled?
-3. `run_console_command` `/spark profiler start` → wait → `/spark profiler stop` → grab the URL or read `spark/` via `read_server_file`
+3. `spark_status` — if installed, `spark_profiler_start { timeout: 30 }` → `spark_profiler_stop` → grab the URL. Without spark, the JVM thread dump is the deepest signal you have.
 4. `list_mods` to map the hot package back to a mod
 5. `read_server_file` on `config/<that-mod>.toml`
 6. `write_config_file` to tune the offending value (auto-backed-up); ask the operator to `/reload` or restart

@@ -311,6 +311,116 @@ const TOOLS: ToolDef[] = [
       return { tool: "thread_dump", args };
     },
   },
+  {
+    spec: {
+      name: "spark_status",
+      description:
+        "Probe whether the spark profiler mod (https://spark.lucko.me) is installed. " +
+        "Always succeeds — never errors. Returns `installed`, `command_available`, `api_available`, and (when present) the current profiler info string. " +
+        "Call this first before any other spark_* tool; if `installed: false`, fall back on `tick_profile` and `thread_dump` and tell the user spark would give better data.",
+      inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    },
+    toAgentLink: () => ({ tool: "spark_status", args: {} }),
+  },
+  {
+    spec: {
+      name: "spark_stats",
+      description:
+        "Multi-window TPS / MSPT / CPU (process+system) / GC stats from the spark Java API. " +
+        "More detailed than `tick_profile` (which only sees the engine's 100-tick rolling average). " +
+        "Returns SPARK_UNAVAILABLE if spark isn't installed.",
+      inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    },
+    toAgentLink: () => ({ tool: "spark_stats", args: {} }),
+  },
+  {
+    spec: {
+      name: "spark_profiler_start",
+      description:
+        "Start a spark profiler sample. Non-blocking — returns once spark accepts the command. " +
+        "Pair with `spark_profiler_stop` after letting the sample run (~30-60s) to retrieve a viewer URL. " +
+        "Set `timeout` for hands-off operation (recommended): the profiler auto-stops and uploads. " +
+        "Call `spark_status` first to verify spark is installed.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          timeout: { type: "number", description: "Auto-stop after N seconds (1-3600). Recommended for hands-off use." },
+          interval_ms: { type: "number", description: "Sample interval in ms. Default ~4ms; raise to reduce overhead." },
+          only_ticks_over_ms: { type: "number", description: "Only record ticks slower than this (ms). Useful for spike hunting." },
+          thread_all: { type: "boolean", description: "Sample every thread, not just Server thread." },
+          alloc: { type: "boolean", description: "Allocation profile instead of CPU. Heavier." },
+        },
+        additionalProperties: false,
+      },
+    },
+    toAgentLink: (a) => {
+      const args: Record<string, unknown> = {};
+      if (typeof a.timeout === "number") args.timeout = a.timeout;
+      if (typeof a.interval_ms === "number") args.interval_ms = a.interval_ms;
+      if (typeof a.only_ticks_over_ms === "number") args.only_ticks_over_ms = a.only_ticks_over_ms;
+      if (typeof a.thread_all === "boolean") args.thread_all = a.thread_all;
+      if (typeof a.alloc === "boolean") args.alloc = a.alloc;
+      return { tool: "spark_profiler_start", args };
+    },
+  },
+  {
+    spec: {
+      name: "spark_profiler_stop",
+      description:
+        "Stop the active spark profiler and wait briefly for the upload to finish, then return the viewer URL. " +
+        "spark uploads asynchronously — the URL appears via the captured chat output, not the immediate command return. " +
+        "Default wait is 15s; raise `wait_url_ms` for slow networks. If `url_present: false`, the upload is still in flight.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          comment: { type: "string", description: "Optional comment to attach to the sample (visible in viewer)." },
+          save_to_file: { type: "boolean", description: "Save the sample locally instead of uploading. Pair with `read_server_file` on `spark/`." },
+          wait_url_ms: { type: "number", description: "How long to wait for the upload URL (default 15000, max 60000)." },
+        },
+        additionalProperties: false,
+      },
+    },
+    toAgentLink: (a) => {
+      const args: Record<string, unknown> = {};
+      if (typeof a.comment === "string") args.comment = a.comment;
+      if (typeof a.save_to_file === "boolean") args.save_to_file = a.save_to_file;
+      if (typeof a.wait_url_ms === "number") args.wait_url_ms = a.wait_url_ms;
+      return { tool: "spark_profiler_stop", args };
+    },
+  },
+  {
+    spec: {
+      name: "spark_profiler_cancel",
+      description: "Cancel the active spark profiler without uploading. Use to abort a sample you no longer need.",
+      inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    },
+    toAgentLink: () => ({ tool: "spark_profiler_cancel", args: {} }),
+  },
+  {
+    spec: {
+      name: "spark_health_report",
+      description:
+        "Generate a spark health report (TPS, CPU, memory, disk) and upload it for a shareable URL. " +
+        "Cheaper than a profiler sample — use this for a quick \"how's the server doing\" snapshot. " +
+        "Set `memory: true` and/or `network: true` for extra sections.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          memory: { type: "boolean", description: "Include detailed memory breakdown." },
+          network: { type: "boolean", description: "Include network stats." },
+          wait_url_ms: { type: "number", description: "How long to wait for the upload URL (default 10000, max 60000)." },
+        },
+        additionalProperties: false,
+      },
+    },
+    toAgentLink: (a) => {
+      const args: Record<string, unknown> = {};
+      if (typeof a.memory === "boolean") args.memory = a.memory;
+      if (typeof a.network === "boolean") args.network = a.network;
+      if (typeof a.wait_url_ms === "number") args.wait_url_ms = a.wait_url_ms;
+      return { tool: "spark_health_report", args };
+    },
+  },
 ];
 
 const TOOL_BY_NAME = new Map(TOOLS.map((t) => [t.spec.name, t]));
@@ -335,6 +445,11 @@ server is real — actions like \`broadcast\`, \`run_console_command\`, and
   Both use ring buffers and a \`since_seq\` cursor for incremental polling.
 - **Diagnosis**: \`tick_profile\` (avg/p50/p95/p99/max mspt),
   \`thread_dump\` (JVM threads), \`list_mods\`.
+- **Spark integration** (only if the spark mod is installed — call
+  \`spark_status\` first): \`spark_stats\` for richer multi-window stats,
+  \`spark_profiler_start\`/\`spark_profiler_stop\`/\`spark_profiler_cancel\`
+  for sampled CPU profiles with shareable viewer URLs,
+  \`spark_health_report\` for a one-shot TPS/CPU/memory snapshot URL.
 - **Filesystem (sandboxed)**: \`list_dir\`, \`read_server_file\` (any path under
   the server root, read-only), \`write_config_file\` (writes ONLY under
   \`config/\`; existing files are auto-backed-up under
@@ -345,11 +460,12 @@ server is real — actions like \`broadcast\`, \`run_console_command\`, and
 1. \`tick_profile\` — is the avg fine but p99 bad? That's a spike, not steady load.
 2. \`thread_dump\` (try \`only_server: true\` first) — what was \`Server thread\`
    doing when sampled?
-3. If the server has the \`spark\` mod installed, \`run_console_command\` with
-   \`/spark profiler start\` → wait 20–60s → \`/spark profiler stop\`. The
-   command output contains a URL; local profile dumps land in \`spark/\` and
-   can be read via \`read_server_file\`. Without spark, rely on tick_profile +
-   thread_dump.
+3. \`spark_status\` — is spark installed? If yes:
+   - \`spark_profiler_start\` (set \`timeout: 30\` for hands-off auto-stop, or
+     leave it open and call \`spark_profiler_stop\` after the user lets it run),
+   - then read the viewer URL from the stop response.
+   Without spark, rely on \`tick_profile\` + \`thread_dump\` and tell the user
+   spark would give better data.
 4. \`list_mods\` to map a hot package or stack frame back to a mod id.
 5. \`read_server_file\` on \`config/<that-mod>.toml\` to see its settings.
 6. \`write_config_file\` to tune the value (auto-backed-up). Then ask the

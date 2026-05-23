@@ -86,6 +86,12 @@ These MUST be implemented by any conforming server. Per-loader extensions live u
 | `write_config_file` | `{"path":"config/foo.toml","content":"...","overwrite":false,"encoding":"utf-8"}` | `{"path","bytes_written","created":true,"backup":"config/.agent-link-backup/..."}` |
 | `tick_profile` | `{}` | `{"samples":100,"avg_mspt":12.4,"max_mspt":48.9,"p50_mspt":11.0,"p95_mspt":22.0,"p99_mspt":40.0,"tps":19.97,"window_ticks":100}` |
 | `thread_dump` | `{"max_frames":30,"only_server":false}` | `{"threads":[{"id","name","state","lock?","lock_owner?","stack":[...],"stack_truncated"}], "count":N}` |
+| `spark_status` | `{}` | `{"installed":true,"command_available":true,"api_available":true,"profiler_info":"..."}` — never errors |
+| `spark_stats` | `{}` | `{"api_available":true,"tps":{"seconds_5":19.9,...},"mspt":{"seconds_10":{"mean","max","min","median","p95"}},"cpu_process":{...},"cpu_system":{...},"gc":{"G1 Young Generation":{...}}}` |
+| `spark_profiler_start` | `{"timeout":30,"interval_ms":4,"only_ticks_over_ms":50,"thread_all":false,"alloc":false}` | `{"started":true,"command":"/spark profiler start ...","output":"..."}` |
+| `spark_profiler_stop` | `{"comment":"...","save_to_file":false,"wait_url_ms":15000}` | `{"command","output","url?","url_present"}` |
+| `spark_profiler_cancel` | `{}` | `{"output","cancelled":true}` |
+| `spark_health_report` | `{"memory":false,"network":false,"wait_url_ms":10000}` | `{"command","output","url?","url_present"}` |
 
 ### Pull vs push
 
@@ -115,6 +121,17 @@ For incremental polling pass the previous response's `head_seq` as `since_seq` n
 - The `config/.agent-link-backup/` directory itself is never writable — restore manually if needed.
 - Deletes, moves, and renames are intentionally not exposed; use `run_console_command` if the operating system level is required.
 
+## Spark integration
+
+When the [spark](https://spark.lucko.me) profiler mod is installed, six additional tools light up. They are loader-agnostic on the wire, but Forge is the only loader implemented today.
+
+- `spark_status` always succeeds; agents should call it before any other `spark_*` tool. If `installed: false`, fall back on `tick_profile` and `thread_dump`.
+- `spark_stats` uses the spark Java API (`me.lucko:spark-api`, loaded reflectively so the mod still runs without spark). Returns multi-window TPS / MSPT / CPU / GC breakdowns.
+- `spark_profiler_start` / `_stop` / `_cancel` wrap `/spark profiler ...`. The wire protocol stays request/response — `_stop` blocks for up to `wait_url_ms` (default 15s, max 60s) waiting for spark's asynchronous upload to surface a viewer URL. If the URL doesn't arrive in time, `url_present: false` is returned and the agent can either retry or read `spark/` via `read_server_file`.
+- `spark_health_report` runs `/spark health --upload` and returns the URL.
+
+When spark is not installed, every tool except `spark_status` returns `SPARK_UNAVAILABLE`.
+
 ## Error codes
 
 | code | meaning |
@@ -126,3 +143,4 @@ For incremental polling pass the previous response's `head_seq` as `since_seq` n
 | `INVALID_ARGS` | argument validation failed |
 | `INTERNAL_ERROR` | unexpected exception (server logs the trace) |
 | `TIMEOUT` | tool exceeded its server-side budget |
+| `SPARK_UNAVAILABLE` | a `spark_*` tool was called but the spark mod is not installed |
