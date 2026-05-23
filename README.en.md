@@ -96,9 +96,10 @@ For agents without skill support, feed `.claude/skills/<name>/SKILL.md` directly
 
 ## Safety boundaries
 
-- **Writes** are limited to `config/**`, auto-backed-up to `config/.agent-link-backup/<name>.<timestamp>.bak`, atomic rename.
+- **Writes** are gated by `write_allow` / `write_deny` glob lists in `config/agent-link.toml` (defaults: `write_allow = ["config/**"]`, `write_deny = []`). Edit the file and restart the server to widen or tighten what agents can write. `write_deny` takes precedence over `write_allow`. Full rules, glob syntax, and examples are in [docs/protocol.md](docs/protocol.md) under "Filesystem sandbox".
+- **Other write guarantees**: auto-backup to `config/.agent-link-backup/<encoded-path>.<timestamp>.bak`, atomic rename, 4 MiB hard cap. The backup directory itself is never writable.
 - **Reads** can touch anywhere under server root, capped at 256 KiB by default and 4 MiB hard. Binary files come back base64.
-- **Never allowed**: writing `mods/*.jar`, deleting files, running OS shell, changing the token, escaping the root with `..`.
+- **Never allowed**: deleting files, running OS shell, changing the token, escaping the root with `..`.
 - **Op commands**: `run_console_command` runs at op level 4. The bundled `instructions` tell agents to require explicit user confirmation before `stop`, `/op`, `/ban`, etc.
 - Default bind is `127.0.0.1`; `allow_remote = true` flips to `0.0.0.0` — firewall accordingly.
 

@@ -19,11 +19,12 @@ import java.time.format.DateTimeFormatter;
 import java.util.Base64;
 
 /**
- * Writes a file under {@code server_root/config/}.
+ * Writes a file under the server root, gated by the configured write_allow /
+ * write_deny glob lists in {@code config/agent-link.toml}.
  *
- * <p>Sandbox: writes outside config/ are rejected by {@link ServerPaths#resolveUnderConfig}.
- * <p>Audit: every successful write is mirrored to the server log so a human reviewer can
- * see what an agent changed.
+ * <p>Sandbox: see {@link ServerPaths#resolveForWrite} for the allow/deny semantics.
+ * <p>Audit: every successful write is mirrored to the server log so a human reviewer
+ * can see what an agent changed.
  * <p>Backup: when the target exists, the prior contents are copied to
  * {@code config/.agent-link-backup/<name>.<ts>.bak} before being overwritten.
  */
@@ -72,13 +73,14 @@ public class WriteConfigFileTool implements Tool {
                     "content exceeds " + HARD_MAX_BYTES + " bytes");
         }
 
-        Path target = ServerPaths.resolveUnderConfig(mc, rel);
+        Path target = ServerPaths.resolveForWrite(mc, rel);
 
         // Forbid writing into the backup dir directly to keep restoration sane.
+        // Even if write_allow somehow includes the backup dir, this safety net stays.
         Path configRoot = ServerPaths.root(mc).resolve("config");
         Path backupRoot = configRoot.resolve(BACKUP_DIR);
         if (target.startsWith(backupRoot)) {
-            throw new ToolException("INVALID_ARGS", "Cannot write into backup directory");
+            throw new ToolException("INVALID_ARGS", "Cannot write into the backup directory");
         }
 
         boolean existed = Files.exists(target);
@@ -97,7 +99,11 @@ public class WriteConfigFileTool implements Tool {
             if (existed) {
                 Files.createDirectories(backupRoot);
                 String stamp = LocalDateTime.now().format(TS);
-                Path backup = backupRoot.resolve(target.getFileName().toString() + "." + stamp + ".bak");
+                // Encode the relative path so backups from outside config/ don't collide
+                // with same-named files. Inside config/ this stays close to the old name.
+                String shown = ServerPaths.relativize(mc, target);
+                String safeName = shown.replace('/', '_');
+                Path backup = backupRoot.resolve(safeName + "." + stamp + ".bak");
                 Files.copy(target, backup, StandardCopyOption.REPLACE_EXISTING);
                 backupRel = ServerPaths.relativize(mc, backup);
             }

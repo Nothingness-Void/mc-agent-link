@@ -85,11 +85,26 @@ agent 这一步只能让用户做(除非 agent 有控制服务器进程的能力
 listen_port = 25580
 allow_remote = false
 token = "abcd1234..."   # 拿这个值
+
+# 写权限白名单/黑名单。glob 语法,默认仅允许 config/。
+write_allow = ["config/**"]
+write_deny = []
 ```
 
 如果用户的服务器在远端机器,agent 让用户把 token 发过来,不要让用户暴露其他字段。
 
 > **安全提示**:这个 token 等同于服务端 op 权限。如果用户在公开聊天里发,告诉他重新生成(把 toml 里 token 字段清空,重启服务器,会重新生成)。
+
+### 可选:调整写权限
+
+默认 agent 只能写 `config/**`。如果用户想让 agent 改更多文件(比如 `data/whitelist/`、`world/datapacks/`),让用户改 `agent-link.toml` 里的 `write_allow`,然后重启服务器:
+
+```toml
+write_allow = ["config/**", "data/whitelist/*.json"]
+write_deny  = ["config/security/**"]   # 即使在 allow 范围内,这里也会被拒绝
+```
+
+`write_deny` 优先于 `write_allow`,常用来在大范围放权后挖洞排除敏感路径。空数组 `write_allow = []` 表示完全只读。Glob 语法:`**` 匹配任意层级,`*` 匹配单层任意字符,`?` 匹配单字符。
 
 ## Step 5 — 写 MCP host 配置
 

@@ -250,15 +250,15 @@ const TOOLS: ToolDef[] = [
     spec: {
       name: "write_config_file",
       description:
-        "Write a file under `config/` (the only writable area). " +
+        "Write a file under the server root, gated by the operator's `write_allow` / `write_deny` glob lists in `config/agent-link.toml` (default: only `config/**` is writable). " +
         "If the file already exists, the prior contents are auto-backed-up to " +
-        "`config/.agent-link-backup/<name>.<timestamp>.bak` before being overwritten. " +
+        "`config/.agent-link-backup/<encoded-path>.<timestamp>.bak` before being overwritten. " +
         "Set `overwrite: true` to replace an existing file. " +
-        "Use this to tune mod configs after diagnosis — never to install jars or touch `mods/`.",
+        "If you get `INVALID_ARGS` mentioning write_allow/write_deny, the path isn't permitted by the operator's policy — explain to the user, don't try to bypass.",
       inputSchema: {
         type: "object",
         properties: {
-          path: { type: "string", description: 'Must start with "config/". e.g. "config/forge-common.toml".' },
+          path: { type: "string", description: 'Server-root-relative path. Default policy allows `config/**` only; the operator may have widened or narrowed this.' },
           content: { type: "string", description: "File contents. UTF-8 string by default; pass base64 if `encoding: \"base64\"`." },
           encoding: { type: "string", enum: ["utf-8", "base64"], description: "Default utf-8." },
           overwrite: { type: "boolean", description: "Default false. Required true to replace an existing file." },
@@ -451,9 +451,10 @@ server is real — actions like \`broadcast\`, \`run_console_command\`, and
   for sampled CPU profiles with shareable viewer URLs,
   \`spark_health_report\` for a one-shot TPS/CPU/memory snapshot URL.
 - **Filesystem (sandboxed)**: \`list_dir\`, \`read_server_file\` (any path under
-  the server root, read-only), \`write_config_file\` (writes ONLY under
-  \`config/\`; existing files are auto-backed-up under
-  \`config/.agent-link-backup/\`).
+  the server root, read-only), \`write_config_file\` (gated by the operator's
+  \`write_allow\`/\`write_deny\` glob lists in \`config/agent-link.toml\`;
+  default policy permits only \`config/**\`. Existing files are auto-backed-up
+  under \`config/.agent-link-backup/\`).
 
 # Diagnosing lag — recommended loop
 
@@ -479,9 +480,11 @@ then \`read_server_file\` on the newest \`.txt\`. Pair with \`list_mods\` and
 
 # Safety rules — please follow
 
-- Writes are limited to \`config/\` by the server. Don't try to bypass; you'll
-  just get \`INVALID_ARGS\`. Never assume you can write to \`mods/\`, \`world/\`,
-  or anywhere else.
+- Writes are gated by the operator's \`write_allow\`/\`write_deny\` glob lists
+  in \`config/agent-link.toml\`. Default policy permits only \`config/**\`. If
+  you get \`INVALID_ARGS\` mentioning write_allow/write_deny, the operator has
+  not given permission for that path — explain this to the user (they can
+  edit the file and restart the server to widen it). Never try to bypass.
 - \`run_console_command\` runs at op level 4. Treat it like a root shell: do
   not run \`stop\`, \`/op\`, \`/deop\`, \`/ban\`, or world-mutating commands
   (\`/fill\`, \`/kill @e\`) without explicit user confirmation.

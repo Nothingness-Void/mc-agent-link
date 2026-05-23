@@ -61,7 +61,7 @@ Diagnosis & remote management:
 - `list_mods` — installed mods with id, version, display name
 - `read_server_file` — read any file under server root (crash reports, logs, configs, spark output…)
 - `list_dir` — list a directory under server root
-- `write_config_file` — **only writable area is `config/`**; existing files are auto-backed-up to `config/.agent-link-backup/`
+- `write_config_file` — writes are gated by `write_allow` / `write_deny` globs in `config/agent-link.toml` (default: `config/**` only). Existing files are auto-backed-up to `config/.agent-link-backup/`
 - `tick_profile` — full tick distribution (avg / p50 / p95 / p99 / max mspt)
 - `thread_dump` — JVM thread dump with state and stack frames
 

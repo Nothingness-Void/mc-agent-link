@@ -98,9 +98,10 @@ mc-agent-link/
 
 ## 安全边界
 
-- **写**:**只允许** `config/**`,自动备份到 `config/.agent-link-backup/<name>.<时间戳>.bak`,原子重命名。
-- **读**:服务端 root 内任意文件,默认 256 KiB 上限,硬上限 4 MiB,二进制回退 base64。
-- **绝不允许**:写 `mods/*.jar`、删除文件、运行 shell、改 token、写到 `..`。
+- **写**:`write_config_file` 受 `config/agent-link.toml` 里的 `write_allow` / `write_deny` 两条 glob 列表控制(默认 `write_allow = ["config/**"]`、`write_deny = []`)。要扩大或收紧权限,直接改这个文件然后重启服务器。`write_deny` 优先于 `write_allow`。详细规则、glob 语法、示例见 [docs/protocol.md](docs/protocol.md) 的 "Filesystem sandbox" 段。
+- **写文件其他保证**:自动备份到 `config/.agent-link-backup/<encoded-path>.<时间戳>.bak`,原子重命名,4 MiB 上限。备份目录本身永远不可写。
+- **读**:服务端 root 内任意文件,默认 256 KiB,硬上限 4 MiB,二进制回退 base64。
+- **绝不允许**:删除文件、运行 OS shell、改 token、`..` 逃逸。
 - **op 命令**:`run_console_command` 是 op level 4,内置 instructions 提示 agent 在 `stop` / `/op` / `/ban` 等命令前必须经过用户确认。
 - 默认绑定 `127.0.0.1`;`allow_remote = true` 才会监听 `0.0.0.0`,自己判断要不要加防火墙。
 

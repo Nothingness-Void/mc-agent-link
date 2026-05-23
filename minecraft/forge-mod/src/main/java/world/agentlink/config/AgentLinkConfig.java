@@ -8,6 +8,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.SecureRandom;
 import java.util.HexFormat;
+import java.util.List;
 
 /**
  * Loaded once on mod init. Hand-rolled instead of Forge's ForgeConfigSpec because
@@ -20,10 +21,14 @@ public final class AgentLinkConfig {
             int listenPort,
             boolean allowRemote,
             String token,
+            List<String> writeAllow,
+            List<String> writeDeny,
             String version
     ) {}
 
     private static final String FILE_NAME = "agent-link.toml";
+    private static final List<String> DEFAULT_WRITE_ALLOW = List.of("config/**");
+    private static final List<String> DEFAULT_WRITE_DENY = List.of();
     private static Snapshot CURRENT;
 
     private AgentLinkConfig() {}
@@ -44,6 +49,9 @@ public final class AgentLinkConfig {
             boolean allowRemote = cfg.getOrElse("allow_remote", false);
             String token = cfg.getOrElse("token", "");
 
+            List<String> writeAllow = readStringList(cfg, "write_allow", DEFAULT_WRITE_ALLOW);
+            List<String> writeDeny = readStringList(cfg, "write_deny", DEFAULT_WRITE_DENY);
+
             if (token.isBlank()) {
                 token = generateToken();
                 cfg.set("token", token);
@@ -54,14 +62,36 @@ public final class AgentLinkConfig {
             cfg.set("allow_remote", allowRemote);
             cfg.setComment("allow_remote", " false = bind to 127.0.0.1 only. true = bind to 0.0.0.0 (LAN/internet). Use a firewall if true.");
 
+            cfg.set("write_allow", writeAllow);
+            cfg.setComment("write_allow",
+                    "\n write_config_file glob allowlist. A path is writable only if it matches at least one of these.\n" +
+                    " Patterns are evaluated relative to the server root.\n" +
+                    " Glob syntax: ** (any segments), * (any chars within a segment), ? (one char).\n" +
+                    " Default: [\"config/**\"] — only config/ is writable.");
+            cfg.set("write_deny", writeDeny);
+            cfg.setComment("write_deny",
+                    "\n write_config_file glob denylist. Evaluated BEFORE write_allow — anything matched here is rejected\n" +
+                    " regardless of write_allow. Use to carve out exceptions, e.g. [\"config/security/**\"].\n" +
+                    " Default: [] (nothing extra denied).");
+
             cfg.save();
-            CURRENT = new Snapshot(port, allowRemote, token, "0.1.0");
+            CURRENT = new Snapshot(port, allowRemote, token, writeAllow, writeDeny, "0.1.0");
 
             if (fresh) {
                 AgentLinkMod.LOG.info("agent-link wrote default config to {}", path);
                 AgentLinkMod.LOG.info("agent-link generated token: {}", token);
             }
         }
+    }
+
+    private static List<String> readStringList(CommentedFileConfig cfg, String key, List<String> fallback) {
+        Object raw = cfg.get(key);
+        if (raw == null) return fallback;
+        if (raw instanceof List<?> list) {
+            return list.stream().map(String::valueOf).toList();
+        }
+        AgentLinkMod.LOG.warn("agent-link: config key '{}' is not a list; using default", key);
+        return fallback;
     }
 
     private static String generateToken() {

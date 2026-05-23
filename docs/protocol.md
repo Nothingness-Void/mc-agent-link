@@ -112,11 +112,43 @@ For incremental polling pass the previous response's `head_seq` as `since_seq` n
 
 ## Filesystem sandbox
 
-`read_server_file` and `list_dir` accept any path under the server root (defined as `MinecraftServer#getServerDirectory`). `write_config_file` is the only write tool: it accepts paths under `config/` only and rejects everything else. Path traversal (`..`) and absolute paths are rejected by all three.
+`read_server_file` and `list_dir` accept any path under the server root (defined as `MinecraftServer#getServerDirectory`). Path traversal (`..`) and absolute paths are rejected.
+
+`write_config_file` is the only write tool. It is gated by two glob lists in `config/agent-link.toml`:
+
+```toml
+write_allow = ["config/**"]   # default — only config/ is writable
+write_deny = []               # default — nothing extra denied
+```
+
+Evaluation order:
+
+1. Path must resolve inside server root.
+2. If any `write_deny` glob matches → reject (`INVALID_ARGS`, "matches write_deny pattern X").
+3. If no `write_allow` glob matches → reject (`INVALID_ARGS`, "does not match any write_allow pattern").
+4. Otherwise → allowed.
+
+Glob syntax follows the JDK's `FileSystem.getPathMatcher` — `**` matches any number of segments, `*` matches any chars within a segment, `?` matches one char. Patterns are evaluated against the server-root-relative path with forward slashes (e.g. `config/foo.toml`). Edit the file, restart the server, the new rules take effect.
+
+Examples:
+
+```toml
+# Allow forge configs and a specific data file, but never the security one.
+write_allow = ["config/**", "data/whitelist/*.json"]
+write_deny  = ["config/security/**"]
+
+# Read-only mode — no writes ever succeed.
+write_allow = []
+
+# Wide open (DON'T do this on a real server) — every path under server root.
+write_allow = ["**"]
+```
+
+Other guarantees:
 
 - Reads are capped at 4 MiB per call (default 256 KiB). Binary files are returned base64-encoded.
 - Writes are capped at 4 MiB and are atomic (write to `*.agent-link.tmp`, rename onto target).
-- Existing files are auto-backed-up to `config/.agent-link-backup/<name>.<timestamp>.bak` before being overwritten.
+- Existing files are auto-backed-up to `config/.agent-link-backup/<encoded-path>.<timestamp>.bak` before being overwritten. The encoded path replaces `/` with `_` so backups from outside `config/` don't collide.
 - Successful writes are mirrored to the server log (`agent-link: wrote …`) for human audit.
 - The `config/.agent-link-backup/` directory itself is never writable — restore manually if needed.
 - Deletes, moves, and renames are intentionally not exposed; use `run_console_command` if the operating system level is required.
