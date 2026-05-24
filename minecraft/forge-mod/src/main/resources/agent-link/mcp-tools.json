@@ -51,6 +51,49 @@
     "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
   },
   {
+    "name": "get_agent_requests",
+    "description": "Pull OP-created in-game requests submitted with /agent. Use since_seq/head_seq for incremental polling. Requests are queued until the agent replies or marks them done.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "since_seq": { "type": "number", "description": "Only return requests with seq > this value. Omit or 0 for the recent tail." },
+        "limit": { "type": "number", "description": "Max requests to return (default 20, hard cap 100)." },
+        "include_done": { "type": "boolean", "description": "Include done/failed/canceled requests. Default false." }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "update_agent_request_status",
+    "description": "Update an in-game /agent request status, optionally notifying the requesting player.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Request id from get_agent_requests, e.g. agent-12." },
+        "status": { "type": "string", "enum": ["pending", "working", "done", "failed", "canceled"], "description": "Default working." },
+        "message": { "type": "string", "description": "Short status message shown to the requesting player." },
+        "notify_player": { "type": "boolean", "description": "Default true." }
+      },
+      "required": ["id"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "reply_agent_request",
+    "description": "Reply to an in-game /agent request and send the response back to the requesting player.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Request id from get_agent_requests, e.g. agent-12." },
+        "message": { "type": "string", "description": "Reply text. Long replies are truncated/split for Minecraft chat." },
+        "mark_done": { "type": "boolean", "description": "Mark the request done after replying. Default true." },
+        "notify_player": { "type": "boolean", "description": "Send the reply to the requesting player if online. Default true." }
+      },
+      "required": ["id", "message"],
+      "additionalProperties": false
+    }
+  },
+  {
     "name": "get_recent_events",
     "description": "Pull recent server events (chat, joins, leaves, deaths) on demand. Use this when the user asks what's been happening on the server. Default returns up to 50 most recent events. Pass `since_seq` to fetch only new events since a previous call's `head_seq`. Pass `topics` to filter (e.g. just chat). The mod buffers ~1024 events; older ones are dropped.",
     "inputSchema": {

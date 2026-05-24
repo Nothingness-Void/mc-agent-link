@@ -19,6 +19,7 @@ Claude Code、Cursor、自定义 agent 都说 MCP,但 Minecraft 服务器不说�
 | 类别 | 工具 | 用途 |
 |---|---|---|
 | 操作 | `ping` `run_console_command` `list_online_players` `get_player_info` `broadcast` `get_server_stats` | 跑控制台命令、查在线玩家、广播消息 |
+| 游戏内请求 | `/agent <请求>` + `get_agent_requests` `update_agent_request_status` `reply_agent_request` | OP 在游戏里向 agent 发起诊断/操作请求,agent 处理后回到游戏内 |
 | 观察(pull) | `get_recent_events` `get_recent_logs` | 读最近的聊天/进出/死亡事件,以及完整服务器日志(含异常栈) |
 | 诊断 | `tick_profile` `thread_dump` `list_mods` | tick 分布、JVM 线程 dump、已装 mod 列表 |
 | 文件(沙盒) | `list_dir` `read_server_file` `write_config_file` | 服务端 root 下任意文件**只读**;`config/**` 才能写,且自动备份 |
@@ -68,7 +69,7 @@ mc-agent-link/
 傻瓜式安装:
 
 1. **装 mod**:把 `agent-link-forge-1.20.1-*.jar` 丢进服务器 `mods/`,启动服务器。
-2. **复制 setup link**:控制台会打印一行 `agent-link setup link (...)`。这条链接 10 分钟内一次性有效。
+2. **复制 setup link**:控制台会打印一行 `agent-link setup link (...)`。这条链接 10 分钟内一次性有效;如果没配对成功,mod 会自动刷新并打印新链接。
 3. **发给 agent**:把整条 setup link 发给 Claude Code / Cursor / 自定义 agent。agent 会用 `/pair` 换取 MCP 配置、写入 host 配置,再调用 `ping` 验证。
 
 setup link 长这样:
@@ -77,7 +78,7 @@ setup link 长这样:
 https://github.com/Nothingness-Void/mc-agent-link#agent-link-setup=...
 ```
 
-如果配对过期或已被使用,重启服务器会生成新的 setup link。
+如果配对过期,看控制台最新的 refreshed setup link;如果已被使用,说明配对已经成功。
 
 服务器在别的机器上的话:把 `agent-link.toml` 里的 `allow_remote` 改成 `true`,把 `mcp_allowed_origins` 收紧到信任的 client,重启,并确保防火墙放行 `mcp_listen_port`。
 

@@ -66,7 +66,7 @@ mc-agent-link/
 Foolproof path:
 
 1. **Install the mod**: drop `agent-link-forge-1.20.1-*.jar` into your server's `mods/` directory and start the server.
-2. **Copy the setup link**: the console prints an `agent-link setup link (...)` line. It is one-use and valid for 10 minutes.
+2. **Copy the setup link**: the console prints an `agent-link setup link (...)` line. It is one-use and valid for 10 minutes; if pairing has not succeeded, the mod refreshes and prints a new link automatically.
 3. **Send it to your agent**: paste the full setup link into Claude Code / Cursor / your custom agent. The agent exchanges it through `/pair`, writes the MCP host config, then calls `ping` to verify.
 
 The setup link looks like this:
@@ -75,7 +75,7 @@ The setup link looks like this:
 https://github.com/Nothingness-Void/mc-agent-link#agent-link-setup=...
 ```
 
-If the pairing code expires or has already been used, restart the server to get a new setup link.
+If the pairing code expires, use the latest refreshed setup link from the console. If it has already been used, pairing has already succeeded.
 
 For remote servers, set `allow_remote = true` in `agent-link.toml`, narrow `mcp_allowed_origins` to your trusted clients, restart, and make sure your firewall allows `mcp_listen_port`.
 

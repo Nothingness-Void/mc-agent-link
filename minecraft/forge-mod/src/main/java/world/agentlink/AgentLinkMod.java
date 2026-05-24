@@ -2,12 +2,14 @@ package world.agentlink;
 
 import com.mojang.logging.LogUtils;
 import net.minecraftforge.common.MinecraftForge;
+import net.minecraftforge.event.RegisterCommandsEvent;
 import net.minecraftforge.event.server.ServerStartedEvent;
 import net.minecraftforge.event.server.ServerStoppingEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.event.lifecycle.FMLCommonSetupEvent;
 import org.slf4j.Logger;
+import world.agentlink.agent.AgentCommand;
 import world.agentlink.config.AgentLinkConfig;
 import world.agentlink.transport.AgentLinkServer;
 import world.agentlink.transport.mcp.McpHttpServer;
@@ -56,6 +58,11 @@ public class AgentLinkMod {
         } catch (Exception e) {
             LOG.error("agent-link failed to start", e);
         }
+    }
+
+    @SubscribeEvent
+    public void onRegisterCommands(RegisterCommandsEvent event) {
+        AgentCommand.register(event);
     }
 
     @SubscribeEvent

@@ -153,6 +153,18 @@ Other guarantees:
 - The `config/.agent-link-backup/` directory itself is never writable — restore manually if needed.
 - Deletes, moves, and renames are intentionally not exposed; use `run_console_command` if the operating system level is required.
 
+## In-game OP requests
+
+Operators can submit a request from inside Minecraft:
+
+```text
+/agent check why the server is lagging
+```
+
+The command requires permission level 2 and enqueues a pull-mode request. Agents should call `get_agent_requests`, acknowledge work with `update_agent_request_status`, then answer with `reply_agent_request`. Replies are sent back to the requesting player if they are still online.
+
+`get_agent_requests` returns `head_seq`/`oldest_seq` like `get_recent_events`, so agents should pass the previous `head_seq` as `since_seq` to avoid refetching old requests.
+
 ## Spark integration
 
 When the [spark](https://spark.lucko.me) profiler mod is installed, six additional tools light up. They are loader-agnostic on the wire, but Forge is the only loader implemented today.
@@ -172,7 +184,7 @@ In addition to the WebSocket protocol above, the mod exposes the same tool surfa
 
 **MCP endpoint**: `POST http://<host>:<mcp_listen_port>/mcp` (default port `25581`).
 
-**Setup link**: on startup the mod logs a one-use setup link valid for 10 minutes:
+**Setup link**: on startup the mod logs a one-use setup link valid for 10 minutes. If pairing has not succeeded when it expires, the mod refreshes the pair code and logs a new setup link:
 
 ```text
 https://github.com/Nothingness-Void/mc-agent-link#agent-link-setup=<base64url-json>

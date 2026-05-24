@@ -108,6 +108,79 @@ const TOOLS: ToolDef[] = [
   },
   {
     spec: {
+      name: "get_agent_requests",
+      description:
+        "Pull OP-created in-game requests submitted with /agent. Use since_seq/head_seq for incremental polling. Requests are queued until the agent replies or marks them done.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          since_seq: { type: "number", description: "Only return requests with seq > this value. Omit or 0 for the recent tail." },
+          limit: { type: "number", description: "Max requests to return (default 20, hard cap 100)." },
+          include_done: { type: "boolean", description: "Include done/failed/canceled requests. Default false." },
+        },
+        additionalProperties: false,
+      },
+    },
+    toAgentLink: (a) => {
+      const args: Record<string, unknown> = {};
+      if (typeof a.since_seq === "number") args.since_seq = a.since_seq;
+      if (typeof a.limit === "number") args.limit = a.limit;
+      if (typeof a.include_done === "boolean") args.include_done = a.include_done;
+      return { tool: "get_agent_requests", args };
+    },
+  },
+  {
+    spec: {
+      name: "update_agent_request_status",
+      description: "Update an in-game /agent request status, optionally notifying the requesting player.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          id: { type: "string", description: "Request id from get_agent_requests, e.g. agent-12." },
+          status: { type: "string", enum: ["pending", "working", "done", "failed", "canceled"], description: "Default working." },
+          message: { type: "string", description: "Short status message shown to the requesting player." },
+          notify_player: { type: "boolean", description: "Default true." },
+        },
+        required: ["id"],
+        additionalProperties: false,
+      },
+    },
+    toAgentLink: (a) => {
+      const args: Record<string, unknown> = { id: String(a.id ?? "") };
+      if (typeof a.status === "string") args.status = a.status;
+      if (typeof a.message === "string") args.message = a.message;
+      if (typeof a.notify_player === "boolean") args.notify_player = a.notify_player;
+      return { tool: "update_agent_request_status", args };
+    },
+  },
+  {
+    spec: {
+      name: "reply_agent_request",
+      description: "Reply to an in-game /agent request and send the response back to the requesting player.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          id: { type: "string", description: "Request id from get_agent_requests, e.g. agent-12." },
+          message: { type: "string", description: "Reply text. Long replies are truncated/split for Minecraft chat." },
+          mark_done: { type: "boolean", description: "Mark the request done after replying. Default true." },
+          notify_player: { type: "boolean", description: "Send the reply to the requesting player if online. Default true." },
+        },
+        required: ["id", "message"],
+        additionalProperties: false,
+      },
+    },
+    toAgentLink: (a) => {
+      const args: Record<string, unknown> = {
+        id: String(a.id ?? ""),
+        message: String(a.message ?? ""),
+      };
+      if (typeof a.mark_done === "boolean") args.mark_done = a.mark_done;
+      if (typeof a.notify_player === "boolean") args.notify_player = a.notify_player;
+      return { tool: "reply_agent_request", args };
+    },
+  },
+  {
+    spec: {
       name: "get_recent_events",
       description:
         "Pull recent server events (chat, joins, leaves, deaths) on demand. " +
@@ -443,6 +516,9 @@ server is real — actions like \`broadcast\`, \`run_console_command\`, and
 - **Observation (pull)**: \`get_recent_events\` for chat / join / leave / death,
   \`get_recent_logs\` for the full server console (stack traces included).
   Both use ring buffers and a \`since_seq\` cursor for incremental polling.
+- **In-game OP requests**: OPs can submit \`/agent <request>\` from inside the
+  Minecraft server. Poll \`get_agent_requests\`, acknowledge with
+  \`update_agent_request_status\`, then answer with \`reply_agent_request\`.
 - **Diagnosis**: \`tick_profile\` (avg/p50/p95/p99/max mspt),
   \`thread_dump\` (JVM threads), \`list_mods\`.
 - **Spark integration** (only if the spark mod is installed — call
@@ -498,10 +574,14 @@ then \`read_server_file\` on the newest \`.txt\`. Pair with \`list_mods\` and
 \`get_recent_events\` and \`get_recent_logs\` return \`head_seq\` — pass it as
 \`since_seq\` next call to fetch only what's new. Don't refetch the full tail
 every turn.
+
+\`get_agent_requests\` also returns \`head_seq\`. If an OP-created request asks
+for lag/crash/status help, handle it like a normal user request and reply back
+to the player with \`reply_agent_request\`.
 `.trim();
 
 const server = new Server(
-  { name: "agent-link", version: "0.1.4-alpha" },
+  { name: "agent-link", version: "0.1.5-alpha" },
   { capabilities: { tools: {} }, instructions: INSTRUCTIONS },
 );
 

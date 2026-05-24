@@ -89,7 +89,7 @@ Content-Type: application/json
 
 这个 `mcp` 对象就是要写进 MCP host 配置里的 `mcpServers.minecraft`。
 
-setup link **10 分钟内一次性有效**。如果 `/pair` 返回 `401`,说明 code 错了、过期了或已被使用;让用户重启服务器拿新的 setup link。
+setup link **10 分钟内一次性有效**。如果 `/pair` 返回 `401`,说明 code 错了、过期了或已被使用;让用户复制控制台里最新的 refreshed setup link。未配对成功前,mod 会每次过期后自动打印新链接。
 
 兼容/故障排查时,仍可读 `<server>/config/agent-link.toml` 手动取 token:
 

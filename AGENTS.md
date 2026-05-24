@@ -35,7 +35,7 @@ Content-Type: application/json
 6. Restart or reload the MCP host if needed.
 7. Verify by calling the `ping` tool.
 
-If `/pair` returns `401`, the code is wrong, expired, or already used. Ask the user to restart the Minecraft server and send the new setup link.
+If `/pair` returns `401`, the code is wrong, expired, or already used. Ask the user to send the latest refreshed setup link from the Minecraft server console.
 
 ## MCP host config shape
 
