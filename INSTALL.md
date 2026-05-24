@@ -2,7 +2,7 @@
 
 > **目标读者**:任何能读 markdown 的 AI agent。把这份文档丢给 Claude Code / Cursor / 自定义 agent,它应该能照步骤把 mc-agent-link 装到用户的 Minecraft 服务器上,无需用户手动操作除了"放 jar 进 mods/ 启动一次"之外的事。
 
-> **0.1.2-alpha 起的推荐路径是 HTTP 直连** —— mod 自己暴露 MCP HTTP endpoint,host 配置一行 url + Bearer。不再需要 Node bridge。Bridge 路径(stdio)保留作为兼容/老配置,见文末 **附录 A**。
+> **推荐路径是 setup link + HTTP 直连** —— mod 自己暴露 MCP HTTP endpoint,并在开服时打印一次性 setup link。agent 用链接完成配对、写 MCP host 配置。不需要 Node bridge。Bridge 路径(stdio)保留作为兼容/老配置,见文末 **附录 A**。
 
 ## 安装前提(确认这些再继续)
 
@@ -46,18 +46,57 @@ $env:JAVA_HOME = "C:\Program Files\Java\jdk-17.0.3.1" # Windows
 
 产物:`minecraft/forge-mod/build/libs/agent-link-forge-1.20.1-*.jar`。拷到用户的 `<server>/mods/`。
 
-## Step 2 — 启动一次服务器并拿 token
+## Step 2 — 启动服务器并拿 setup link
 
 agent 这一步只能让用户做(除非 agent 有控制服务器进程的能力):
 
-> 「请启动你的 Minecraft 服务器一次,等控制台打出 `agent-link MCP HTTP listening on http://127.0.0.1:25581/mcp` 后再停止。这一步是为了让 mod 生成 token。」
+> 「请启动你的 Minecraft 服务器,等控制台打出 `agent-link setup link ...` 后,把整条 setup link 发给我。」
 
-服务器停掉后,agent 读 `<server>/config/agent-link.toml`,提取 `token = "..."` 字段。
+setup link 形如:
+
+```text
+https://github.com/Nothingness-Void/mc-agent-link#agent-link-setup=eyJ2IjoxLCJtY3BfdXJsIjoi...
+```
+
+agent 收到后:
+
+1. 从 URL fragment 里取出 `agent-link-setup=` 后面的 base64url payload。
+2. base64url 解码成 JSON。
+3. 读取 `pair_url`、`pair_code`、`mcp_url`、`expires_at`。
+4. 在过期前向 `pair_url` 发送:
+
+```http
+POST /pair
+Accept: application/json
+Content-Type: application/json
+
+{"pair_code":"1234-5678"}
+```
+
+成功返回:
+
+```json
+{
+  "mcp": {
+    "type": "http",
+    "url": "http://127.0.0.1:25581/mcp",
+    "headers": {
+      "Authorization": "Bearer <token>"
+    }
+  }
+}
+```
+
+这个 `mcp` 对象就是要写进 MCP host 配置里的 `mcpServers.minecraft`。
+
+setup link **10 分钟内一次性有效**。如果 `/pair` 返回 `401`,说明 code 错了、过期了或已被使用;让用户重启服务器拿新的 setup link。
+
+兼容/故障排查时,仍可读 `<server>/config/agent-link.toml` 手动取 token:
 
 ```toml
 listen_port = 25580           # WebSocket 端口(给非 MCP 客户端用)
 allow_remote = false          # false = 仅 127.0.0.1
-token = "abcd1234..."         # 拿这个值
+token = "abcd1234..."
 
 mcp_enabled = true            # MCP HTTP transport
 mcp_listen_port = 25581       # MCP endpoint 端口
@@ -66,8 +105,6 @@ mcp_allowed_origins = ["null", "http://localhost", "http://127.0.0.1"]
 write_allow = ["config/**"]   # 写权限白名单
 write_deny = []
 ```
-
-如果用户的服务器在远端机器,agent 让用户把 token 发过来,不要让用户暴露其他字段。
 
 > **安全提示**:这个 token 等同于服务端 op 权限。如果用户在公开聊天里发,告诉他重新生成(把 toml 里 token 字段清空,重启服务器,会重新生成)。
 
@@ -97,12 +134,14 @@ write_deny  = ["config/security/**"]   # 即使在 allow 范围内,这里也会�
       "type": "http",
       "url": "http://127.0.0.1:25581/mcp",
       "headers": {
-        "Authorization": "Bearer <Step 2 拿到的 token>"
+        "Authorization": "Bearer <pair 返回的 token>"
       }
     }
   }
 }
 ```
+
+实际写入时使用 `/pair` 返回的 `mcp` 对象,不要重新手打 token。
 
 如果用户的服务器在另一台机器上:把 `127.0.0.1` 换成那台机器的 IP,**并且**让用户在 `<server>/config/agent-link.toml` 里:
 

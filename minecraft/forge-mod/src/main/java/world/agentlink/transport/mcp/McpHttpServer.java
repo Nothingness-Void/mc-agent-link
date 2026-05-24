@@ -14,6 +14,9 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.security.SecureRandom;
+import java.time.Instant;
+import java.util.Base64;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
@@ -27,12 +30,21 @@ import java.util.concurrent.Executors;
 public final class McpHttpServer implements HttpHandler {
 
     private static final String ENDPOINT = "/mcp";
+    private static final String PAIR_ENDPOINT = "/pair";
     private static final int MAX_BODY_BYTES = 128 * 1024;
+    private static final int PAIR_CODE_TTL_SECONDS = 10 * 60;
+    private static final String SETUP_LINK_BASE = "https://github.com/Nothingness-Void/mc-agent-link";
+    private static final SecureRandom RANDOM = new SecureRandom();
 
     private final Snapshot cfg;
     private final RequestDispatcher dispatcher;
     private final JsonRpcHandler rpc;
     private final InetSocketAddress address;
+    private final String publicMcpUrl;
+    private final String publicPairUrl;
+    private final String pairCode;
+    private final long pairExpiresAtMs;
+    private boolean pairConsumed;
     private HttpServer server;
 
     public McpHttpServer(Snapshot cfg, RequestDispatcher dispatcher) {
@@ -41,11 +53,17 @@ public final class McpHttpServer implements HttpHandler {
         this.rpc = new JsonRpcHandler(dispatcher, cfg.version());
         String host = cfg.allowRemote() ? "0.0.0.0" : "127.0.0.1";
         this.address = new InetSocketAddress(host, cfg.mcpListenPort());
+        String publicHost = "127.0.0.1";
+        this.publicMcpUrl = "http://" + publicHost + ":" + cfg.mcpListenPort() + ENDPOINT;
+        this.publicPairUrl = "http://" + publicHost + ":" + cfg.mcpListenPort() + PAIR_ENDPOINT;
+        this.pairCode = generatePairCode();
+        this.pairExpiresAtMs = System.currentTimeMillis() + PAIR_CODE_TTL_SECONDS * 1000L;
     }
 
     public void start() throws IOException {
         server = HttpServer.create(address, 0);
         server.createContext(ENDPOINT, this);
+        server.createContext(PAIR_ENDPOINT, this::handlePair);
         server.setExecutor(Executors.newCachedThreadPool(r -> {
             Thread t = new Thread(r, "agent-link-mcp-http");
             t.setDaemon(true);
@@ -63,6 +81,25 @@ public final class McpHttpServer implements HttpHandler {
 
     public InetSocketAddress address() {
         return address;
+    }
+
+    public String setupLink() {
+        JsonObject payload = new JsonObject();
+        payload.addProperty("v", 1);
+        payload.addProperty("repo", SETUP_LINK_BASE);
+        payload.addProperty("mcp_url", publicMcpUrl);
+        payload.addProperty("pair_url", publicPairUrl);
+        payload.addProperty("pair_code", pairCode);
+        payload.addProperty("expires_at", pairExpiresAtMs);
+        payload.addProperty("expires_at_iso", Instant.ofEpochMilli(pairExpiresAtMs).toString());
+        payload.addProperty("allow_remote", cfg.allowRemote());
+        String encoded = Base64.getUrlEncoder().withoutPadding()
+                .encodeToString(payload.toString().getBytes(StandardCharsets.UTF_8));
+        return SETUP_LINK_BASE + "#agent-link-setup=" + encoded;
+    }
+
+    public long pairExpiresAtMs() {
+        return pairExpiresAtMs;
     }
 
     @Override
@@ -143,6 +180,90 @@ public final class McpHttpServer implements HttpHandler {
         }
     }
 
+    private void handlePair(HttpExchange ex) throws IOException {
+        try (ex) {
+            String method = ex.getRequestMethod();
+            if (!"POST".equalsIgnoreCase(method)) {
+                ex.getResponseHeaders().add("Allow", "POST");
+                writeStatus(ex, 405, "Only POST is supported");
+                return;
+            }
+
+            String origin = firstHeader(ex, "Origin");
+            if (!originAllowed(origin)) {
+                writeStatus(ex, 403, "Origin not allowed");
+                return;
+            }
+
+            String accept = firstHeader(ex, "Accept");
+            if (accept != null && !accept.isBlank() && !acceptsJson(accept)) {
+                writeStatus(ex, 406, "Accept must include application/json");
+                return;
+            }
+
+            byte[] bodyBytes = readBody(ex.getRequestBody(), MAX_BODY_BYTES);
+            if (bodyBytes == null) {
+                writeStatus(ex, 413, "Request body too large");
+                return;
+            }
+
+            JsonElement parsed;
+            try {
+                parsed = JsonParser.parseString(new String(bodyBytes, StandardCharsets.UTF_8));
+            } catch (Exception parseErr) {
+                writeStatus(ex, 400, "Request body must be JSON");
+                return;
+            }
+            if (!parsed.isJsonObject()) {
+                writeStatus(ex, 400, "Request body must be a JSON object");
+                return;
+            }
+
+            JsonObject body = parsed.getAsJsonObject();
+            String code = "";
+            if (body.has("pair_code") && !body.get("pair_code").isJsonNull()) {
+                code = body.get("pair_code").getAsString();
+            } else if (body.has("code") && !body.get("code").isJsonNull()) {
+                code = body.get("code").getAsString();
+            }
+
+            JsonObject result = consumePairCode(code);
+            if (result == null) {
+                writeStatus(ex, 401, "Invalid or expired pair code");
+                return;
+            }
+            writeJson(ex, 200, result);
+        } catch (Exception e) {
+            AgentLinkMod.LOG.warn("agent-link pair request crashed", e);
+        }
+    }
+
+    private synchronized JsonObject consumePairCode(String code) {
+        if (pairConsumed) return null;
+        if (System.currentTimeMillis() > pairExpiresAtMs) return null;
+        if (!constantTimeEquals(code == null ? "" : code.trim(), pairCode)) return null;
+
+        pairConsumed = true;
+
+        JsonObject headers = new JsonObject();
+        headers.addProperty("Authorization", "Bearer " + cfg.token());
+
+        JsonObject mcp = new JsonObject();
+        mcp.addProperty("type", "http");
+        mcp.addProperty("url", publicMcpUrl);
+        mcp.add("headers", headers);
+
+        JsonObject server = new JsonObject();
+        server.addProperty("minecraft", true);
+        server.addProperty("version", cfg.version());
+
+        JsonObject result = new JsonObject();
+        result.add("mcp", mcp);
+        result.add("server", server);
+        result.addProperty("mcp_host_hint", "Add this object under mcpServers.minecraft in your MCP host config.");
+        return result;
+    }
+
     private boolean originAllowed(String origin) {
         List<String> allowed = cfg.mcpAllowedOrigins();
         // No Origin header = native client (Claude Code, curl). Map to literal "null" so the
@@ -152,6 +273,12 @@ public final class McpHttpServer implements HttpHandler {
             if (pattern.equals("*") || pattern.equalsIgnoreCase(key)) return true;
         }
         return false;
+    }
+
+    private static String generatePairCode() {
+        int a = RANDOM.nextInt(10000);
+        int b = RANDOM.nextInt(10000);
+        return String.format(Locale.ROOT, "%04d-%04d", a, b);
     }
 
     private boolean tokenMatches(String authz) {

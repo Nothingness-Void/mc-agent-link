@@ -10,6 +10,8 @@ import world.agentlink.transport.ClientSession;
 /** Cancels the active spark profiler without uploading. Use to abort. */
 public class SparkProfilerCancelTool implements Tool {
 
+    private static final long OUTPUT_WAIT_MS = 2_000;
+
     private final MinecraftServer mc;
 
     public SparkProfilerCancelTool(MinecraftServer mc) {
@@ -26,7 +28,7 @@ public class SparkProfilerCancelTool implements Tool {
         if (!SparkBridge.isAvailable(mc)) {
             throw new ToolException("SPARK_UNAVAILABLE", "spark mod not installed");
         }
-        SparkBridge.CommandResult cr = SparkBridge.runSpark(mc, "profiler cancel", 0);
+        SparkBridge.CommandResult cr = SparkBridge.runSpark(mc, "profiler cancel", OUTPUT_WAIT_MS);
         JsonObject r = new JsonObject();
         r.addProperty("output", cr.output());
         r.addProperty("cancelled", cr.returnValue() >= 0);

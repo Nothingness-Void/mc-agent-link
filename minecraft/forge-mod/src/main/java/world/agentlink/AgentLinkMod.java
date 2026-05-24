@@ -47,6 +47,8 @@ public class AgentLinkMod {
                     mcpServer.start();
                     LOG.info("agent-link MCP HTTP listening on http://{}:{}/mcp",
                             host, cfg.mcpListenPort());
+                    LOG.info("agent-link setup link (send this to your AI agent, one use, expires at {}): {}",
+                            java.time.Instant.ofEpochMilli(mcpServer.pairExpiresAtMs()), mcpServer.setupLink());
                 } catch (Exception e) {
                     LOG.error("agent-link MCP HTTP failed to start (WebSocket transport still up)", e);
                 }

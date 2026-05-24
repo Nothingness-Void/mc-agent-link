@@ -22,7 +22,6 @@ import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -73,23 +72,20 @@ public final class SparkBridge {
      * managedBlock-on-server-thread approach therefore never saw the URL. We
      * install a temporary log4j appender for the duration of the wait window
      * that picks up anything carrying spark's marker character or matching the
-     * viewer URL pattern, and complete a future the moment a URL lands.
+     * viewer URL pattern, and waits only for URL arrival or the requested timeout.
      */
     public static CommandResult runSpark(MinecraftServer mc, String subcommand, long waitMs) {
         List<String> captured = Collections.synchronizedList(new ArrayList<>());
         CompletableFuture<String> urlFuture = new CompletableFuture<>();
 
-        SparkLogTap tap = installLogTap(captured, urlFuture);
+        SparkLogTap tap = installLogTap(mc, captured, urlFuture);
 
         CommandSource sink = new CommandSource() {
             @Override
             public void sendSystemMessage(Component component) {
                 String s = component.getString();
                 addLine(captured, s);
-                Matcher m = URL_PATTERN.matcher(s);
-                if (m.find() && !urlFuture.isDone()) {
-                    urlFuture.complete(m.group());
-                }
+                completeUrlIfPresent(mc, urlFuture, s);
             }
 
             @Override
@@ -126,12 +122,10 @@ public final class SparkBridge {
         }
 
         if (waitMs > 0) {
+            long deadline = System.currentTimeMillis() + waitMs;
+            CompletableFuture.delayedExecutor(waitMs, TimeUnit.MILLISECONDS).execute(() -> wakeServer(mc));
             try {
-                urlFuture.get(waitMs, TimeUnit.MILLISECONDS);
-            } catch (TimeoutException te) {
-                // Expected for cancel and "no-upload" health paths — leave url null.
-            } catch (InterruptedException ie) {
-                Thread.currentThread().interrupt();
+                mc.managedBlock(() -> urlFuture.isDone() || System.currentTimeMillis() >= deadline);
             } catch (Throwable t) {
                 AgentLinkMod.LOG.warn("spark wait error", t);
             }
@@ -144,6 +138,16 @@ public final class SparkBridge {
             joined = String.join("\n", captured);
         }
         return new CommandResult(rv, joined, extractUrl(joined));
+    }
+
+    private static void completeUrlIfPresent(MinecraftServer mc, CompletableFuture<String> urlFuture, String text) {
+        if (urlFuture.isDone()) return;
+        Matcher m = URL_PATTERN.matcher(text);
+        if (m.find()) {
+            if (urlFuture.complete(m.group())) {
+                wakeServer(mc);
+            }
+        }
     }
 
     private static void addLine(List<String> list, String msg) {
@@ -167,7 +171,7 @@ public final class SparkBridge {
     /** Anchor for the dynamically-added appender so we can yank it back out. */
     private record SparkLogTap(AbstractAppender appender, LoggerContext ctx) {}
 
-    private static SparkLogTap installLogTap(List<String> captured, CompletableFuture<String> urlFuture) {
+    private static SparkLogTap installLogTap(MinecraftServer mc, List<String> captured, CompletableFuture<String> urlFuture) {
         try {
             LoggerContext ctx = (LoggerContext) LogManager.getContext(false);
             Configuration cfg = ctx.getConfiguration();
@@ -190,8 +194,8 @@ public final class SparkBridge {
                     if (!isSpark && !hasUrl) return;
 
                     addLine(captured, msg);
-                    if (hasUrl && !urlFuture.isDone()) {
-                        urlFuture.complete(um.group());
+                    if (hasUrl) {
+                        completeUrlIfPresent(mc, urlFuture, msg);
                     }
                 }
             };
@@ -204,6 +208,13 @@ public final class SparkBridge {
         } catch (Throwable t) {
             AgentLinkMod.LOG.warn("agent-link: failed to install spark log tap", t);
             return null;
+        }
+    }
+
+    private static void wakeServer(MinecraftServer mc) {
+        try {
+            mc.execute(() -> {});
+        } catch (Throwable ignored) {
         }
     }
 

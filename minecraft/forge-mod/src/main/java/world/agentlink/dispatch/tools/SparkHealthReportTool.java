@@ -13,7 +13,7 @@ import world.agentlink.transport.ClientSession;
  */
 public class SparkHealthReportTool implements Tool {
 
-    private static final long DEFAULT_WAIT = 10_000;
+    private static final long DEFAULT_WAIT = 45_000;
     private static final long MAX_WAIT = 60_000;
 
     private final MinecraftServer mc;

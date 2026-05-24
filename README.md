@@ -12,7 +12,7 @@
 
 Claude Code、Cursor、自定义 agent 都说 MCP,但 Minecraft 服务器不说。RCON 又只能"问一句答一句",拿不到事件流、profile 数据、crash 上下文。
 
-`mc-agent-link` 在服务端起一个 WebSocket 端点,在 agent 这一侧跑一个 MCP bridge,中间用一个简单的 JSON 协议串起来。多 agent 可以同时连进来,各干各的。
+`mc-agent-link` 在服务端模组内直接暴露 MCP HTTP 端点,并保留 WebSocket 协议给非 MCP 客户端和旧 bridge。多 agent 可以同时连进来,各干各的。
 
 ## 它能干什么
 
@@ -65,31 +65,23 @@ mc-agent-link/
 
 ## 快速开始
 
-3 步:
+傻瓜式安装:
 
-1. **装 mod**:把 `agent-link-forge-1.20.1-*.jar` 丢进服务器 `mods/`,启动一次。
-2. **拿 token**:服务器起来后看 `<server>/config/agent-link.toml` 的 `token = "..."`。控制台首次启动时也会打一行 `agent-link generated token: xxx`。
-3. **配 MCP host**(以 Claude Code 为例,`~/.claude.json` 或项目 `.mcp.json`):
+1. **装 mod**:把 `agent-link-forge-1.20.1-*.jar` 丢进服务器 `mods/`,启动服务器。
+2. **复制 setup link**:控制台会打印一行 `agent-link setup link (...)`。这条链接 10 分钟内一次性有效。
+3. **发给 agent**:把整条 setup link 发给 Claude Code / Cursor / 自定义 agent。agent 会用 `/pair` 换取 MCP 配置、写入 host 配置,再调用 `ping` 验证。
 
-   ```json
-   {
-     "mcpServers": {
-       "minecraft": {
-         "type": "http",
-         "url": "http://127.0.0.1:25581/mcp",
-         "headers": {
-           "Authorization": "Bearer <上一步的 token>"
-         }
-       }
-     }
-   }
-   ```
+setup link 长这样:
 
-服务器在别的机器上的话:把 `127.0.0.1` 换成对应 IP,把 `agent-link.toml` 里的 `allow_remote` 改成 `true`,把 `mcp_allowed_origins` 收紧到信任的 client,重启。
+```text
+https://github.com/Nothingness-Void/mc-agent-link#agent-link-setup=...
+```
 
-**用旧 host 不支持 HTTP transport?** 仓库里的 Node bridge(`packages/mcp-server`)走 stdio + WebSocket,详见 [INSTALL.md 附录 A](INSTALL.md#附录-a--node-bridgestdio兼容路径)。
+如果配对过期或已被使用,重启服务器会生成新的 setup link。
 
-**有 agent 帮忙安装?** 把 [INSTALL.md](INSTALL.md) 给它读,按步骤自动完成。
+服务器在别的机器上的话:把 `agent-link.toml` 里的 `allow_remote` 改成 `true`,把 `mcp_allowed_origins` 收紧到信任的 client,重启,并确保防火墙放行 `mcp_listen_port`。
+
+**用旧 host 不支持 HTTP transport?** 仓库里的 Node bridge(`packages/mcp-server`)走 stdio + WebSocket,详见 [INSTALL.md 附录 A](INSTALL.md#附录-a--node-bridgestdio兼容路径)。这是兼容路径,新安装优先用 setup link + HTTP。
 
 ## 让 agent 知道怎么用
 

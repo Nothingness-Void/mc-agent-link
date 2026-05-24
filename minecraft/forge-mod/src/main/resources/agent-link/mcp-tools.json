@@ -214,7 +214,7 @@
       "properties": {
         "memory": { "type": "boolean", "description": "Include detailed memory breakdown." },
         "network": { "type": "boolean", "description": "Include network stats." },
-        "wait_url_ms": { "type": "number", "description": "How long to wait for the upload URL (default 10000, max 60000)." }
+        "wait_url_ms": { "type": "number", "description": "How long to wait for the upload URL (default 45000, max 60000)." }
       },
       "additionalProperties": false
     }

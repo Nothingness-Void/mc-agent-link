@@ -10,7 +10,7 @@ Lets AI agents (via the [Model Context Protocol](https://modelcontextprotocol.io
 
 ## Why
 
-Modern AI agents (Claude Code, Cursor, custom agents) speak MCP. Minecraft servers don't. RCON works but is request-only and limited. This project bridges the gap with a real-time WebSocket protocol on the server side and an MCP server on the agent side, so multiple agents can connect, observe, and act concurrently.
+Modern AI agents (Claude Code, Cursor, custom agents) speak MCP. Minecraft servers don't. RCON works but is request-only and limited. This project bridges the gap with an in-mod MCP HTTP endpoint, while retaining a WebSocket protocol for non-MCP clients and legacy bridges, so multiple agents can connect, observe, and act concurrently.
 
 ## What it does
 
@@ -63,31 +63,23 @@ mc-agent-link/
 
 ## Quick start
 
-Three steps:
+Foolproof path:
 
-1. **Install the mod**: drop `agent-link-forge-1.20.1-*.jar` into your server's `mods/` directory and start the server once.
-2. **Get the token**: it's generated in `<server>/config/agent-link.toml` after first start. The console also prints `agent-link generated token: ...` once.
-3. **Configure your MCP host** (Claude Code example, in `~/.claude.json` or project `.mcp.json`):
+1. **Install the mod**: drop `agent-link-forge-1.20.1-*.jar` into your server's `mods/` directory and start the server.
+2. **Copy the setup link**: the console prints an `agent-link setup link (...)` line. It is one-use and valid for 10 minutes.
+3. **Send it to your agent**: paste the full setup link into Claude Code / Cursor / your custom agent. The agent exchanges it through `/pair`, writes the MCP host config, then calls `ping` to verify.
 
-   ```json
-   {
-     "mcpServers": {
-       "minecraft": {
-         "type": "http",
-         "url": "http://127.0.0.1:25581/mcp",
-         "headers": {
-           "Authorization": "Bearer <token from step 2>"
-         }
-       }
-     }
-   }
-   ```
+The setup link looks like this:
 
-For remote servers, replace `127.0.0.1` with the server's IP, set `allow_remote = true` in `agent-link.toml`, narrow `mcp_allowed_origins` to your trusted clients, and restart.
+```text
+https://github.com/Nothingness-Void/mc-agent-link#agent-link-setup=...
+```
 
-**Older host that doesn't support HTTP transport?** The Node bridge in `packages/mcp-server` still works over stdio + WebSocket — see [INSTALL.md Appendix A](INSTALL.md#附录-a--node-bridgestdio兼容路径).
+If the pairing code expires or has already been used, restart the server to get a new setup link.
 
-**Want an agent to install it for you?** Hand it [INSTALL.md](INSTALL.md) — it's written to be self-executing.
+For remote servers, set `allow_remote = true` in `agent-link.toml`, narrow `mcp_allowed_origins` to your trusted clients, restart, and make sure your firewall allows `mcp_listen_port`.
+
+**Older host that doesn't support HTTP transport?** The Node bridge in `packages/mcp-server` still works over stdio + WebSocket — see [INSTALL.md Appendix A](INSTALL.md#附录-a--node-bridgestdio兼容路径). This is the legacy path; new installs should use setup link + HTTP.
 
 ## How agents discover what to do
 

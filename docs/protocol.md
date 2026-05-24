@@ -91,7 +91,7 @@ These MUST be implemented by any conforming server. Per-loader extensions live u
 | `spark_profiler_start` | `{"timeout":30,"interval_ms":4,"only_ticks_over_ms":50,"thread_all":false,"alloc":false}` | `{"started":true,"command":"/spark profiler start ...","output":"..."}` |
 | `spark_profiler_stop` | `{"comment":"...","save_to_file":false,"wait_url_ms":15000}` | `{"command","output","url?","url_present"}` |
 | `spark_profiler_cancel` | `{}` | `{"output","cancelled":true}` |
-| `spark_health_report` | `{"memory":false,"network":false,"wait_url_ms":10000}` | `{"command","output","url?","url_present"}` |
+| `spark_health_report` | `{"memory":false,"network":false,"wait_url_ms":45000}` | `{"command","output","url?","url_present"}` |
 
 ### Pull vs push
 
@@ -160,7 +160,9 @@ When the [spark](https://spark.lucko.me) profiler mod is installed, six addition
 - `spark_status` always succeeds; agents should call it before any other `spark_*` tool. If `installed: false`, fall back on `tick_profile` and `thread_dump`.
 - `spark_stats` uses the spark Java API (`me.lucko:spark-api`, loaded reflectively so the mod still runs without spark). Returns multi-window TPS / MSPT / CPU / GC breakdowns.
 - `spark_profiler_start` / `_stop` / `_cancel` wrap `/spark profiler ...`. The wire protocol stays request/response — `_stop` blocks for up to `wait_url_ms` (default 15s, max 60s) waiting for spark's asynchronous upload to surface a viewer URL. If the URL doesn't arrive in time, `url_present: false` is returned and the agent can either retry or read `spark/` via `read_server_file`.
-- `spark_health_report` runs `/spark health --upload` and returns the URL.
+- `spark_health_report` runs `/spark health --upload` and returns the URL. Default `wait_url_ms` is 45s because spark may spend ~30s collecting world statistics before uploading.
+
+While waiting for spark URLs, the mod keeps the Minecraft server task queue draining; non-URL spark output is captured into `output` but never ends the wait early.
 
 When spark is not installed, every tool except `spark_status` returns `SPARK_UNAVAILABLE`.
 
@@ -168,9 +170,56 @@ When spark is not installed, every tool except `spark_status` returns `SPARK_UNA
 
 In addition to the WebSocket protocol above, the mod exposes the same tool surface as a native MCP Streamable HTTP server. MCP hosts (Claude Code, Cursor, …) connect directly — no Node bridge required.
 
-**Endpoint**: `POST http://<host>:<mcp_listen_port>/mcp` (default port `25581`).
+**MCP endpoint**: `POST http://<host>:<mcp_listen_port>/mcp` (default port `25581`).
 
-**Headers**:
+**Setup link**: on startup the mod logs a one-use setup link valid for 10 minutes:
+
+```text
+https://github.com/Nothingness-Void/mc-agent-link#agent-link-setup=<base64url-json>
+```
+
+The decoded payload is:
+
+```json
+{
+  "v": 1,
+  "repo": "https://github.com/Nothingness-Void/mc-agent-link",
+  "mcp_url": "http://127.0.0.1:25581/mcp",
+  "pair_url": "http://127.0.0.1:25581/pair",
+  "pair_code": "1234-5678",
+  "expires_at": 1779640000000,
+  "expires_at_iso": "2026-05-25T00:00:00Z",
+  "allow_remote": false
+}
+```
+
+Agents exchange it with:
+
+```http
+POST <pair_url>
+Accept: application/json
+Content-Type: application/json
+
+{"pair_code":"1234-5678"}
+```
+
+Success returns the MCP host config block:
+
+```json
+{
+  "mcp": {
+    "type": "http",
+    "url": "http://127.0.0.1:25581/mcp",
+    "headers": {
+      "Authorization": "Bearer <token>"
+    }
+  }
+}
+```
+
+The pair code is consumed after one successful exchange. `401` means invalid, expired, or already used.
+
+**MCP headers**:
 
 - `Authorization: Bearer <token>` — same token as the WebSocket transport (`config/agent-link.toml`)
 - `Accept: application/json` — required by spec; SSE is not produced
@@ -194,7 +243,7 @@ Tool execution failures are returned as MCP tool errors (`isError: true`) rather
 
 | HTTP status | meaning |
 |---|---|
-| `401` | missing or invalid `Authorization` header |
+| `401` | missing/invalid `Authorization` header on `/mcp`, or invalid/expired/used pair code on `/pair` |
 | `403` | `Origin` header not in `mcp_allowed_origins` |
 | `405` | non-`POST` method (or `GET` since we don't stream) |
 | `406` | `Accept` header doesn't include `application/json` |

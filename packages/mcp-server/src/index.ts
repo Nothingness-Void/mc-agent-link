@@ -408,7 +408,7 @@ const TOOLS: ToolDef[] = [
         properties: {
           memory: { type: "boolean", description: "Include detailed memory breakdown." },
           network: { type: "boolean", description: "Include network stats." },
-          wait_url_ms: { type: "number", description: "How long to wait for the upload URL (default 10000, max 60000)." },
+          wait_url_ms: { type: "number", description: "How long to wait for the upload URL (default 45000, max 60000)." },
         },
         additionalProperties: false,
       },
@@ -501,7 +501,7 @@ every turn.
 `.trim();
 
 const server = new Server(
-  { name: "agent-link", version: "0.1.1-alpha" },
+  { name: "agent-link", version: "0.1.4-alpha" },
   { capabilities: { tools: {} }, instructions: INSTRUCTIONS },
 );
 
