@@ -65,9 +65,6 @@ public final class SparkBridge {
                 String s = component.getString();
                 synchronized (lock) {
                     captured.add(s);
-                    if (URL_PATTERN.matcher(s).find()) {
-                        lock.notifyAll();
-                    }
                 }
             }
 
@@ -106,22 +103,31 @@ public final class SparkBridge {
             }
         }
 
-        // Wait for an async URL line if requested.
+        // spark uploads asynchronously and routes its result message back through this
+        // CommandSource. On Forge, ForgeCommandSender bounces sendSuccess(...) onto the
+        // server thread via mc.execute, so we MUST keep draining the main-thread task
+        // queue while we wait — a plain Object.wait() would deadlock the upload because
+        // we *are* the server thread (Tool.invoke runs after RequestDispatcher's
+        // mc.execute()). managedBlock() does the right thing: pollTask + park, repeating
+        // until the supplier is true.
         if (waitMs > 0) {
             long deadline = System.currentTimeMillis() + waitMs;
-            synchronized (lock) {
-                while (!hasUrl(captured) && System.currentTimeMillis() < deadline) {
-                    try {
-                        lock.wait(Math.max(1, deadline - System.currentTimeMillis()));
-                    } catch (InterruptedException ie) {
-                        Thread.currentThread().interrupt();
-                        break;
+            try {
+                mc.managedBlock(() -> {
+                    if (System.currentTimeMillis() >= deadline) return true;
+                    synchronized (lock) {
+                        return hasUrl(captured);
                     }
-                }
+                });
+            } catch (Throwable t) {
+                AgentLinkMod.LOG.warn("spark wait interrupted", t);
             }
         }
 
-        String joined = String.join("\n", captured);
+        String joined;
+        synchronized (lock) {
+            joined = String.join("\n", captured);
+        }
         return new CommandResult(rv, joined, extractUrl(joined));
     }
 
@@ -222,9 +228,24 @@ public final class SparkBridge {
     // Spark's API methods return objects whose runtime classes are package-private
     // anonymous inner classes (e.g. SparkApi$4 implementing DoubleStatistic<TicksPerSecond>).
     // Looking up methods on stat.getClass() finds the erased poll(TicksPerSecond) /
-    // bridge poll(Object), neither of which matches getMethod("poll", StatisticWindow.class).
-    // Always look up methods on the public API interface instead — for DoubleStatistic
-    // its erasure is poll(StatisticWindow), which matches.
+    // bridge poll(Object), neither of which matches by name+param.
+    //
+    // The interface is declared as DoubleStatistic<W extends Enum<W> & StatisticWindow>.
+    // Across spark-api versions the erasure of W has flipped between StatisticWindow and
+    // Enum (multi-bound types erase to the leftmost bound; older snapshots dropped the
+    // Enum bound). Instead of guessing, we scan the interface's methods for the unique
+    // poll(<single-arg, not Object>) — which is the real declared method, not the
+    // synthetic bridge poll(Object).
+
+    private static java.lang.reflect.Method findPollSingleArg(Class<?> iface) throws NoSuchMethodException {
+        for (java.lang.reflect.Method m : iface.getMethods()) {
+            if (!"poll".equals(m.getName()) || m.getParameterCount() != 1) continue;
+            // Skip the synthetic bridge method (poll(Object)).
+            if (m.getParameterTypes()[0] == Object.class) continue;
+            return m;
+        }
+        throw new NoSuchMethodException("No poll(<window>) method on " + iface.getName());
+    }
 
     /**
      * For a {@code DoubleStatistic<W>} where W is the StatisticWindow enum
@@ -235,9 +256,8 @@ public final class SparkBridge {
         JsonObject out = new JsonObject();
         ClassLoader cl = stat.getClass().getClassLoader();
         Class<?> windowEnumClass = Class.forName("me.lucko.spark.api.statistic.StatisticWindow$" + windowEnumName, true, cl);
-        Class<?> windowBase = Class.forName("me.lucko.spark.api.statistic.StatisticWindow", true, cl);
         Class<?> doubleStatistic = Class.forName("me.lucko.spark.api.statistic.types.DoubleStatistic", true, cl);
-        java.lang.reflect.Method pollMethod = doubleStatistic.getMethod("poll", windowBase);
+        java.lang.reflect.Method pollMethod = findPollSingleArg(doubleStatistic);
         pollMethod.setAccessible(true);
 
         for (Object w : windowEnumClass.getEnumConstants()) {
@@ -257,9 +277,8 @@ public final class SparkBridge {
         JsonObject out = new JsonObject();
         ClassLoader cl = stat.getClass().getClassLoader();
         Class<?> windowEnumClass = Class.forName("me.lucko.spark.api.statistic.StatisticWindow$" + windowEnumName, true, cl);
-        Class<?> windowBase = Class.forName("me.lucko.spark.api.statistic.StatisticWindow", true, cl);
         Class<?> genericStatistic = Class.forName("me.lucko.spark.api.statistic.types.GenericStatistic", true, cl);
-        java.lang.reflect.Method pollMethod = genericStatistic.getMethod("poll", windowBase);
+        java.lang.reflect.Method pollMethod = findPollSingleArg(genericStatistic);
         pollMethod.setAccessible(true);
 
         Class<?> averageInfo = Class.forName("me.lucko.spark.api.statistic.misc.DoubleAverageInfo", true, cl);
