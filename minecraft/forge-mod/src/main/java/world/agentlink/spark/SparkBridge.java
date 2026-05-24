@@ -8,10 +8,22 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.world.phys.Vec2;
 import net.minecraft.world.phys.Vec3;
+import org.apache.logging.log4j.Level;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.core.LogEvent;
+import org.apache.logging.log4j.core.LoggerContext;
+import org.apache.logging.log4j.core.appender.AbstractAppender;
+import org.apache.logging.log4j.core.config.Configuration;
+import org.apache.logging.log4j.core.config.LoggerConfig;
 import world.agentlink.AgentLinkMod;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -37,6 +49,11 @@ public final class SparkBridge {
     private static final Pattern URL_PATTERN = Pattern.compile(
             "https?://(?:spark\\.lucko\\.me|sparkprofiler\\.github\\.io|[a-zA-Z0-9.-]*lucko\\.me)/[a-zA-Z0-9._~:/?#\\[\\]@!$&'()*+,;=%-]+");
 
+    /** Spark's status icon prefixes its own messages — useful filter for the log tap. */
+    private static final String SPARK_MARKER = "⚡"; // ⚡
+
+    private static final AtomicLong TAP_COUNTER = new AtomicLong();
+
     private SparkBridge() {}
 
     public record CommandResult(int returnValue, String output, String url) {}
@@ -46,25 +63,32 @@ public final class SparkBridge {
     }
 
     /**
-     * Run a {@code /spark <subcommand>} as op level 4 and capture every chat
-     * line spark emits to the source. The captured text is concatenated with
-     * newlines and any spark viewer URL is extracted.
+     * Run a {@code /spark <subcommand>} as op level 4 and capture every line spark
+     * emits — both via {@link CommandSource} (synchronous replies) and via the
+     * log4j root logger (async upload results, health reports, etc.).
      *
-     * <p>Note: spark profiler stop is asynchronous — when it returns, the
-     * sample upload is in flight on a background thread. The URL message
-     * arrives later, also via the {@link CommandSource} we hand spark, so we
-     * keep the source alive until we time out.
+     * <p>spark routes most output, including the asynchronous viewer URL after a
+     * profiler upload, through {@code Logger.info(...)} on its own worker
+     * threads — never via {@code CommandSource.sendSystemMessage}. The previous
+     * managedBlock-on-server-thread approach therefore never saw the URL. We
+     * install a temporary log4j appender for the duration of the wait window
+     * that picks up anything carrying spark's marker character or matching the
+     * viewer URL pattern, and complete a future the moment a URL lands.
      */
     public static CommandResult runSpark(MinecraftServer mc, String subcommand, long waitMs) {
-        List<String> captured = new ArrayList<>();
-        Object lock = new Object();
+        List<String> captured = Collections.synchronizedList(new ArrayList<>());
+        CompletableFuture<String> urlFuture = new CompletableFuture<>();
+
+        SparkLogTap tap = installLogTap(captured, urlFuture);
 
         CommandSource sink = new CommandSource() {
             @Override
             public void sendSystemMessage(Component component) {
                 String s = component.getString();
-                synchronized (lock) {
-                    captured.add(s);
+                addLine(captured, s);
+                Matcher m = URL_PATTERN.matcher(s);
+                if (m.find() && !urlFuture.isDone()) {
+                    urlFuture.complete(m.group());
                 }
             }
 
@@ -98,47 +122,102 @@ public final class SparkBridge {
         } catch (Exception e) {
             AgentLinkMod.LOG.warn("spark command failed: {}", full, e);
             rv = -1;
-            synchronized (lock) {
-                captured.add("[agent-link] command failed: " + e.getMessage());
+            addLine(captured, "[agent-link] command failed: " + e.getMessage());
+        }
+
+        if (waitMs > 0) {
+            try {
+                urlFuture.get(waitMs, TimeUnit.MILLISECONDS);
+            } catch (TimeoutException te) {
+                // Expected for cancel and "no-upload" health paths — leave url null.
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+            } catch (Throwable t) {
+                AgentLinkMod.LOG.warn("spark wait error", t);
             }
         }
 
-        // spark uploads asynchronously and routes its result message back through this
-        // CommandSource. On Forge, ForgeCommandSender bounces sendSuccess(...) onto the
-        // server thread via mc.execute, so we MUST keep draining the main-thread task
-        // queue while we wait — a plain Object.wait() would deadlock the upload because
-        // we *are* the server thread (Tool.invoke runs after RequestDispatcher's
-        // mc.execute()). managedBlock() does the right thing: pollTask + park, repeating
-        // until the supplier is true.
-        if (waitMs > 0) {
-            long deadline = System.currentTimeMillis() + waitMs;
-            try {
-                mc.managedBlock(() -> {
-                    if (System.currentTimeMillis() >= deadline) return true;
-                    synchronized (lock) {
-                        return hasUrl(captured);
-                    }
-                });
-            } catch (Throwable t) {
-                AgentLinkMod.LOG.warn("spark wait interrupted", t);
-            }
-        }
+        uninstallLogTap(tap);
 
         String joined;
-        synchronized (lock) {
+        synchronized (captured) {
             joined = String.join("\n", captured);
         }
         return new CommandResult(rv, joined, extractUrl(joined));
     }
 
-    private static boolean hasUrl(List<String> lines) {
-        for (String s : lines) if (URL_PATTERN.matcher(s).find()) return true;
-        return false;
+    private static void addLine(List<String> list, String msg) {
+        if (msg == null || msg.isEmpty()) return;
+        synchronized (list) {
+            // Cheap dedup: spark often emits the same string via both the command source
+            // and the log4j root, and tests don't care about the difference.
+            if (list.isEmpty() || !list.get(list.size() - 1).equals(msg)) {
+                list.add(msg);
+            }
+        }
     }
 
     public static String extractUrl(String text) {
         Matcher m = URL_PATTERN.matcher(text);
         return m.find() ? m.group() : null;
+    }
+
+    // ---- log4j tap ---------------------------------------------------------
+
+    /** Anchor for the dynamically-added appender so we can yank it back out. */
+    private record SparkLogTap(AbstractAppender appender, LoggerContext ctx) {}
+
+    private static SparkLogTap installLogTap(List<String> captured, CompletableFuture<String> urlFuture) {
+        try {
+            LoggerContext ctx = (LoggerContext) LogManager.getContext(false);
+            Configuration cfg = ctx.getConfiguration();
+            String name = "agent-link-spark-tap-" + TAP_COUNTER.incrementAndGet();
+
+            AbstractAppender appender = new AbstractAppender(name, null, null, true, null) {
+                @Override
+                public void append(LogEvent event) {
+                    String msg;
+                    try {
+                        msg = event.getMessage().getFormattedMessage();
+                    } catch (Throwable t) {
+                        return;
+                    }
+                    if (msg == null || msg.isEmpty()) return;
+
+                    boolean isSpark = msg.contains(SPARK_MARKER);
+                    Matcher um = URL_PATTERN.matcher(msg);
+                    boolean hasUrl = um.find();
+                    if (!isSpark && !hasUrl) return;
+
+                    addLine(captured, msg);
+                    if (hasUrl && !urlFuture.isDone()) {
+                        urlFuture.complete(um.group());
+                    }
+                }
+            };
+            appender.start();
+            cfg.addAppender(appender);
+            LoggerConfig root = cfg.getRootLogger();
+            root.addAppender(appender, Level.INFO, null);
+            ctx.updateLoggers();
+            return new SparkLogTap(appender, ctx);
+        } catch (Throwable t) {
+            AgentLinkMod.LOG.warn("agent-link: failed to install spark log tap", t);
+            return null;
+        }
+    }
+
+    private static void uninstallLogTap(SparkLogTap tap) {
+        if (tap == null) return;
+        try {
+            Configuration cfg = tap.ctx().getConfiguration();
+            LoggerConfig root = cfg.getRootLogger();
+            root.removeAppender(tap.appender().getName());
+            tap.appender().stop();
+            tap.ctx().updateLoggers();
+        } catch (Throwable t) {
+            AgentLinkMod.LOG.warn("agent-link: failed to uninstall spark log tap", t);
+        }
     }
 
     // ---- Spark Java API (statistics-only) ----------------------------------
