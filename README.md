@@ -29,16 +29,25 @@ Claude Code、Cursor、自定义 agent 都说 MCP,但 Minecraft 服务器不说�
 ## 架构
 
 ```
- ┌──────────────────────┐    stdio      ┌──────────────────────┐    WebSocket    ┌─────────────────────────────┐
- │  Agent(Claude Code, │ ◄──────────►  │  mcp-server (Node)   │ ◄────────────►  │  Forge mod (Java)           │
- │  Cursor, 自定义...)   │     MCP       │  packages/mcp-server │   agent-link    │  minecraft/forge-mod        │
- └──────────────────────┘               └──────────────────────┘    协议         └─────────────────────────────┘
-                                                                                  在 Minecraft 服务端 JVM 内运行
+ ┌──────────────────────┐    Streamable HTTP   ┌─────────────────────────────┐
+ │  Agent(Claude Code, │ ───────────────────► │  Forge mod (Java)           │
+ │  Cursor, 自定义...)   │   POST /mcp + JSON   │  minecraft/forge-mod        │
+ └──────────────────────┘   Bearer auth        │  在 Minecraft 服务端 JVM 内  │
+                                               └─────────────────────────────┘
+                                                  │
+                                                  │ 同时支持
+                                                  ▼
+                            ┌──────────────────────────────────────┐
+                            │  WebSocket :25580 (非 MCP 客户端用)   │
+                            │  + Node bridge (兼容老 host)         │
+                            └──────────────────────────────────────┘
 ```
 
-- **Forge mod** 跑在 Minecraft 服务端 JVM 里,起一个 WebSocket 监听。所有触碰世界状态的活儿都派发到主线程,线程安全。
-- **MCP server** 是一个 Node.js 进程,一边讲 agent-link 协议,一边讲 MCP。一个 mod 可以同时服务多个 agent。
-- **多 agent**:mod 同时接受 N 个 WebSocket 连接,bridge 也支持多个 MCP host。
+- **Forge mod** 跑在 Minecraft 服务端 JVM 里,起两个监听:
+  - `:25581/mcp` —— MCP Streamable HTTP,host(Claude Code、Cursor、…)直接连
+  - `:25580` —— 自家 WebSocket 协议,服务非 MCP 客户端(moderation bot、stdio bridge)
+- 所有触碰世界状态的活儿都派发到主线程,线程安全。
+- **多 agent**:HTTP + WebSocket 各自接受多个并发连接。
 
 ## 仓库结构
 
@@ -50,7 +59,7 @@ mc-agent-link/
 ├── minecraft/
 │   └── forge-mod/          # Forge 1.20.1 mod(Java 17, Gradle)
 ├── packages/
-│   └── mcp-server/         # Node MCP bridge(TypeScript)
+│   └── mcp-server/         # Node MCP bridge(TypeScript,stdio fallback)
 └── INSTALL.md              # 安装指南(给 agent 自动读取用)
 ```
 
@@ -58,7 +67,7 @@ mc-agent-link/
 
 3 步:
 
-1. **装 mod**:把 `agent-link-forge-1.20.1-0.1.0.jar` 丢进服务器 `mods/`,启动一次。
+1. **装 mod**:把 `agent-link-forge-1.20.1-*.jar` 丢进服务器 `mods/`,启动一次。
 2. **拿 token**:服务器起来后看 `<server>/config/agent-link.toml` 的 `token = "..."`。控制台首次启动时也会打一行 `agent-link generated token: xxx`。
 3. **配 MCP host**(以 Claude Code 为例,`~/.claude.json` 或项目 `.mcp.json`):
 
@@ -66,24 +75,25 @@ mc-agent-link/
    {
      "mcpServers": {
        "minecraft": {
-         "command": "node",
-         "args": ["/abs/path/to/mc-agent-link/packages/mcp-server/dist/index.js"],
-         "env": {
-           "AGENT_LINK_URL": "ws://127.0.0.1:25580",
-           "AGENT_LINK_TOKEN": "<上一步的 token>"
+         "type": "http",
+         "url": "http://127.0.0.1:25581/mcp",
+         "headers": {
+           "Authorization": "Bearer <上一步的 token>"
          }
        }
      }
    }
    ```
 
-服务器在别的机器上的话,把 `127.0.0.1` 换成对应 IP,并把 `agent-link.toml` 里的 `allow_remote` 改成 `true` 后重启。
+服务器在别的机器上的话:把 `127.0.0.1` 换成对应 IP,把 `agent-link.toml` 里的 `allow_remote` 改成 `true`,把 `mcp_allowed_origins` 收紧到信任的 client,重启。
+
+**用旧 host 不支持 HTTP transport?** 仓库里的 Node bridge(`packages/mcp-server`)走 stdio + WebSocket,详见 [INSTALL.md 附录 A](INSTALL.md#附录-a--node-bridgestdio兼容路径)。
 
 **有 agent 帮忙安装?** 把 [INSTALL.md](INSTALL.md) 给它读,按步骤自动完成。
 
 ## 让 agent 知道怎么用
 
-每个 MCP host 在 `initialize` 阶段都会拿到 mcp-server 内置的 `instructions` 字符串(简介 + 工具分组 + 卡顿诊断闭环 + 安全规则),不需要用户在 prompt 里手写。
+每个 MCP host 在 `initialize` 阶段都会拿到 mod 内置的 `instructions` 字符串(简介 + 工具分组 + 卡顿诊断闭环 + 安全规则),不需要用户在 prompt 里手写。HTTP 直连和 Node bridge 路径都会暴露同一份 instructions。
 
 仓库还附带 4 个 Claude Code skill(`.claude/skills/` 下,会随 git 走):
 

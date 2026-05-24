@@ -31,6 +31,7 @@ import world.agentlink.transport.ClientSession;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.function.BiConsumer;
 
 public class RequestDispatcher {
 
@@ -68,6 +69,7 @@ public class RequestDispatcher {
         tools.put(tool.name(), tool);
     }
 
+    /** WebSocket frame entry point — keeps the v0 wire shape. */
     public void dispatch(ClientSession session, JsonObject frame) {
         String id = frame.has("id") ? frame.get("id").getAsString() : null;
         String toolName = frame.has("tool") ? frame.get("tool").getAsString() : "";
@@ -75,43 +77,49 @@ public class RequestDispatcher {
                 ? frame.getAsJsonObject("args")
                 : new JsonObject();
 
-        Tool tool = tools.get(toolName);
-        if (tool == null) {
-            sendError(session, id, "UNKNOWN_TOOL", "No such tool: " + toolName);
-            return;
-        }
-
-        // Bounce to main thread for any world / player access.
-        mc.execute(() -> {
-            try {
-                JsonObject result = tool.invoke(args, session);
-                JsonObject resp = new JsonObject();
-                resp.addProperty("v", 0);
-                resp.addProperty("type", "response");
-                if (id != null) resp.addProperty("id", id);
+        invoke(toolName, args, session, (result, err) -> {
+            JsonObject resp = new JsonObject();
+            resp.addProperty("v", 0);
+            resp.addProperty("type", "response");
+            if (id != null) resp.addProperty("id", id);
+            if (err == null) {
                 resp.addProperty("ok", true);
                 resp.add("result", result == null ? new JsonObject() : result);
-                session.send(GSON.toJson(resp));
-            } catch (ToolException te) {
-                sendError(session, id, te.code(), te.getMessage());
-            } catch (Throwable t) {
-                AgentLinkMod.LOG.error("agent-link tool {} crashed", toolName, t);
-                sendError(session, id, "INTERNAL_ERROR", t.getClass().getSimpleName() + ": " + t.getMessage());
+            } else {
+                resp.addProperty("ok", false);
+                JsonObject body = new JsonObject();
+                body.addProperty("code", err.code());
+                body.addProperty("message", err.getMessage() == null ? "" : err.getMessage());
+                resp.add("error", body);
             }
+            session.send(GSON.toJson(resp));
         });
     }
 
-    private void sendError(ClientSession session, String id, String code, String message) {
-        JsonObject resp = new JsonObject();
-        resp.addProperty("v", 0);
-        resp.addProperty("type", "response");
-        if (id != null) resp.addProperty("id", id);
-        resp.addProperty("ok", false);
-        JsonObject body = new JsonObject();
-        body.addProperty("code", code);
-        body.addProperty("message", message == null ? "" : message);
-        resp.add("error", body);
-        session.send(GSON.toJson(resp));
+    /**
+     * Transport-agnostic entry point. Bounces to the server thread, runs the tool, and hands the
+     * result (or error) to {@code done}. {@code session} may be null for transports without a
+     * session model (e.g. MCP HTTP) — tools that touch session state must check.
+     */
+    public void invoke(String toolName, JsonObject args, ClientSession session,
+                       BiConsumer<JsonObject, ToolException> done) {
+        Tool tool = tools.get(toolName);
+        if (tool == null) {
+            done.accept(null, new ToolException("UNKNOWN_TOOL", "No such tool: " + toolName));
+            return;
+        }
+        mc.execute(() -> {
+            try {
+                JsonObject result = tool.invoke(args, session);
+                done.accept(result, null);
+            } catch (ToolException te) {
+                done.accept(null, te);
+            } catch (Throwable t) {
+                AgentLinkMod.LOG.error("agent-link tool {} crashed", toolName, t);
+                done.accept(null, new ToolException("INTERNAL_ERROR",
+                        t.getClass().getSimpleName() + ": " + t.getMessage()));
+            }
+        });
     }
 
     /** Helper for tools that need to read a string arg. */

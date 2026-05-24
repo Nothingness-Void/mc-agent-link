@@ -39,6 +39,10 @@ public class AgentLinkServer extends WebSocketServer {
         return sessions.values();
     }
 
+    public RequestDispatcher dispatcher() {
+        return dispatcher;
+    }
+
     @Override
     public void onOpen(WebSocket conn, ClientHandshake handshake) {
         sessions.put(conn, new ClientSession(conn));

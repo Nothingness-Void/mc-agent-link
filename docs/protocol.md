@@ -164,6 +164,49 @@ When the [spark](https://spark.lucko.me) profiler mod is installed, six addition
 
 When spark is not installed, every tool except `spark_status` returns `SPARK_UNAVAILABLE`.
 
+## MCP Streamable HTTP transport
+
+In addition to the WebSocket protocol above, the mod exposes the same tool surface as a native MCP Streamable HTTP server. MCP hosts (Claude Code, Cursor, …) connect directly — no Node bridge required.
+
+**Endpoint**: `POST http://<host>:<mcp_listen_port>/mcp` (default port `25581`).
+
+**Headers**:
+
+- `Authorization: Bearer <token>` — same token as the WebSocket transport (`config/agent-link.toml`)
+- `Accept: application/json` — required by spec; SSE is not produced
+- `Content-Type: application/json`
+- `Origin` — optional. Native hosts usually omit it; browsers send the origin. Validated against `mcp_allowed_origins` in the config (default `["null", "http://localhost", "http://127.0.0.1"]`).
+
+**Spec compliance**: implements the 2025-06-18 protocol revision with the 2025-03-26 fallback. We do not initiate server-to-client messages, so the GET-based SSE stream documented in the spec is intentionally returned as `405 Method Not Allowed`.
+
+**JSON-RPC 2.0 methods**:
+
+| method | params | result |
+|---|---|---|
+| `initialize` | `{protocolVersion, capabilities, clientInfo}` | `{protocolVersion, capabilities: {tools: {}}, serverInfo: {name: "agent-link", version}, instructions}` |
+| `tools/list` | `{}` | `{tools: [{name, description, inputSchema}, ...]}` (20 tools) |
+| `tools/call` | `{name, arguments}` | `{content: [{type: "text", text: "<JSON tool result>"}], isError: false}` |
+| `notifications/initialized` | (notification) | (acknowledged with `202 Accepted`) |
+
+Tool execution failures are returned as MCP tool errors (`isError: true`) rather than JSON-RPC errors, so the host can surface them to the model.
+
+**Error surfaces**:
+
+| HTTP status | meaning |
+|---|---|
+| `401` | missing or invalid `Authorization` header |
+| `403` | `Origin` header not in `mcp_allowed_origins` |
+| `405` | non-`POST` method (or `GET` since we don't stream) |
+| `406` | `Accept` header doesn't include `application/json` |
+| `413` | request body exceeds 128 KiB |
+| `400` | malformed JSON-RPC request (mapped to JSON-RPC `-32700` / `-32600`) |
+| `200` | successful response (or any JSON-RPC error inside the body) |
+| `202` | acknowledged notification |
+
+The HTTP transport shares the dispatcher and tool registry with the WebSocket transport, so behavior, sandbox limits, and tool semantics are identical. The two transports can run simultaneously — disable HTTP via `mcp_enabled = false` if undesired.
+
+The two stateful tools `subscribe_events` / `unsubscribe_events` are not useful over HTTP (no persistent session); use `get_recent_events` instead.
+
 ## Error codes
 
 | code | meaning |

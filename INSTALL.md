@@ -2,92 +2,68 @@
 
 > **目标读者**:任何能读 markdown 的 AI agent。把这份文档丢给 Claude Code / Cursor / 自定义 agent,它应该能照步骤把 mc-agent-link 装到用户的 Minecraft 服务器上,无需用户手动操作除了"放 jar 进 mods/ 启动一次"之外的事。
 
+> **0.1.2-alpha 起的推荐路径是 HTTP 直连** —— mod 自己暴露 MCP HTTP endpoint,host 配置一行 url + Bearer。不再需要 Node bridge。Bridge 路径(stdio)保留作为兼容/老配置,见文末 **附录 A**。
+
 ## 安装前提(确认这些再继续)
 
 让 agent 检查或问用户:
 
 1. 用户的 Minecraft 服务器是 **Forge 1.20.1**。其他版本/loader 当前不支持。
-2. 用户机器上有 **Node.js ≥ 20**(`node --version` 验证)。
-3. 用户的 agent host 支持 **MCP 客户端配置**(Claude Code / Cursor / Zed / Continue 等都行)。
-4. agent 能访问用户的服务器 `mods/` 目录(本地路径或 SSH/SFTP)。
-5. agent 能读写用户的 MCP host 配置文件(典型路径见下文)。
+2. 用户的 agent host 支持 **MCP 客户端配置**,且支持 HTTP transport(Claude Code 1.0+、Cursor 0.42+、Zed Preview、Continue 都行)。
+3. agent 能访问用户的服务器 `mods/` 目录(本地路径或 SSH/SFTP)。
+4. agent 能读写用户的 MCP host 配置文件(典型路径见下文)。
 
 任一不满足:停下来告诉用户,不要硬装。
 
-## 三个产物
-
-安装一共三件东西:
+## 两个产物
 
 | 产物 | 位置 | 谁放 |
 |---|---|---|
-| Forge mod jar | `<server>/mods/agent-link-forge-1.20.1-0.1.0.jar` | 用户(或 agent 通过 SCP) |
-| MCP bridge | `mc-agent-link/packages/mcp-server/dist/` 编译产物 | agent |
+| Forge mod jar | `<server>/mods/agent-link-forge-1.20.1-*.jar` | 用户(或 agent 通过 SCP) |
 | MCP host 配置 | 见 "Step 4" | agent |
 
-## Step 1 — 拿到仓库
+不需要 Node、不需要 npm、不需要绝对路径。
 
-如果用户已经 clone 了:
+## Step 1 — 拿到 mod jar
 
-```bash
-cd <用户提供的路径>/mc-agent-link
-git pull
-```
+**推荐**:从 [GitHub Releases](https://github.com/Nothingness-Void/mc-agent-link/releases) 下载最新 `agent-link-forge-1.20.1-*.jar`,直接扔进 `<server>/mods/`。
 
-如果没有:
+**自己构建**(需要 JDK 17,严格 17,不是 8 也不是 21):
 
 ```bash
 git clone https://github.com/Nothingness-Void/mc-agent-link.git
-cd mc-agent-link
+cd mc-agent-link/minecraft/forge-mod
+./gradlew shadowJar          # Linux/macOS
+.\gradlew.bat shadowJar      # Windows
 ```
 
-## Step 2 — 构建 mod jar
+如果 `JAVA_HOME` 不对:
 
 ```bash
-cd minecraft/forge-mod
-# Linux/macOS:
-./gradlew shadowJar
-# Windows PowerShell:
-.\gradlew.bat shadowJar
+export JAVA_HOME=/usr/lib/jvm/java-17-openjdk         # Linux
+$env:JAVA_HOME = "C:\Program Files\Java\jdk-17.0.3.1" # Windows
 ```
 
-需要 JDK 17(不是 8、不是 21,严格 17)。如果 `JAVA_HOME` 不对,设置后再跑:
+产物:`minecraft/forge-mod/build/libs/agent-link-forge-1.20.1-*.jar`。拷到用户的 `<server>/mods/`。
 
-```bash
-# 例:
-export JAVA_HOME=/usr/lib/jvm/java-17-openjdk
-# Windows PowerShell:
-$env:JAVA_HOME = "C:\Program Files\Java\jdk-17.0.3.1"
-```
-
-构建产物:`minecraft/forge-mod/build/libs/agent-link-forge-1.20.1-0.1.0.jar`。
-
-把这个 jar 拷到用户的 `<server>/mods/`。
-
-## Step 3 — 构建 MCP bridge
-
-```bash
-cd packages/mcp-server
-npm install
-npm run build
-```
-
-产物:`packages/mcp-server/dist/index.js`。**记住这个绝对路径**,Step 4 要用。
-
-## Step 4 — 让用户启动一次服务器并拿 token
+## Step 2 — 启动一次服务器并拿 token
 
 agent 这一步只能让用户做(除非 agent 有控制服务器进程的能力):
 
-> 「请启动你的 Minecraft 服务器一次,等控制台打出 `agent-link listening on ...` 后再停止。这一步是为了让 mod 生成 token。」
+> 「请启动你的 Minecraft 服务器一次,等控制台打出 `agent-link MCP HTTP listening on http://127.0.0.1:25581/mcp` 后再停止。这一步是为了让 mod 生成 token。」
 
 服务器停掉后,agent 读 `<server>/config/agent-link.toml`,提取 `token = "..."` 字段。
 
 ```toml
-listen_port = 25580
-allow_remote = false
-token = "abcd1234..."   # 拿这个值
+listen_port = 25580           # WebSocket 端口(给非 MCP 客户端用)
+allow_remote = false          # false = 仅 127.0.0.1
+token = "abcd1234..."         # 拿这个值
 
-# 写权限白名单/黑名单。glob 语法,默认仅允许 config/。
-write_allow = ["config/**"]
+mcp_enabled = true            # MCP HTTP transport
+mcp_listen_port = 25581       # MCP endpoint 端口
+mcp_allowed_origins = ["null", "http://localhost", "http://127.0.0.1"]
+
+write_allow = ["config/**"]   # 写权限白名单
 write_deny = []
 ```
 
@@ -106,7 +82,7 @@ write_deny  = ["config/security/**"]   # 即使在 allow 范围内,这里也会�
 
 `write_deny` 优先于 `write_allow`,常用来在大范围放权后挖洞排除敏感路径。空数组 `write_allow = []` 表示完全只读。Glob 语法:`**` 匹配任意层级,`*` 匹配单层任意字符,`?` 匹配单字符。
 
-## Step 5 — 写 MCP host 配置
+## Step 3 — 写 MCP host 配置
 
 根据用户用什么 agent host,写到对应文件。**先读现有文件,合并,不要覆盖。**
 
@@ -118,18 +94,23 @@ write_deny  = ["config/security/**"]   # 即使在 allow 范围内,这里也会�
 {
   "mcpServers": {
     "minecraft": {
-      "command": "node",
-      "args": ["<Step 3 拿到的 dist/index.js 绝对路径>"],
-      "env": {
-        "AGENT_LINK_URL": "ws://127.0.0.1:25580",
-        "AGENT_LINK_TOKEN": "<Step 4 拿到的 token>"
+      "type": "http",
+      "url": "http://127.0.0.1:25581/mcp",
+      "headers": {
+        "Authorization": "Bearer <Step 2 拿到的 token>"
       }
     }
   }
 }
 ```
 
-如果用户的服务器在另一台机器上:把 `127.0.0.1` 换成那台机器的 IP,**并且**让用户在 `<server>/config/agent-link.toml` 里把 `allow_remote` 改成 `true`,重启服务器。提醒用户加防火墙规则。
+如果用户的服务器在另一台机器上:把 `127.0.0.1` 换成那台机器的 IP,**并且**让用户在 `<server>/config/agent-link.toml` 里:
+
+1. 把 `allow_remote` 改成 `true`(这同时影响 WebSocket 和 MCP HTTP 的 bind 地址)
+2. 把 `mcp_allowed_origins` 收紧到你信任的 client(防 DNS rebinding)
+3. 重启服务器
+
+提醒用户加防火墙规则。
 
 ### Claude Code(用户级)
 
@@ -137,17 +118,17 @@ write_deny  = ["config/security/**"]   # 即使在 allow 范围内,这里也会�
 
 ### Cursor
 
-文件:`~/.cursor/mcp.json`(全局)或 `<项目>/.cursor/mcp.json`(项目)。结构同 Claude Code。
-
-### Zed
-
-`~/.config/zed/settings.json`,在 `context_servers` 块下添加,字段名与 Claude Code 相同。
+文件:`~/.cursor/mcp.json`(全局)或 `<项目>/.cursor/mcp.json`(项目)。字段同 Claude Code。
 
 ### 其他 host
 
-参考用户 host 的文档,字段都是标准的 MCP stdio server 配置:`command` + `args` + `env`。
+任何支持 MCP Streamable HTTP transport 的 host 都能用,需要的字段是:
 
-## Step 6 — 验证
+- endpoint:`http://<host>:<mcp_listen_port>/mcp`
+- header:`Authorization: Bearer <token>`
+- header:`Accept: application/json`(client 一般默认带)
+
+## Step 4 — 验证
 
 agent 让用户在 host 里跑一句:**「ping the minecraft server」**。
 
@@ -155,11 +136,11 @@ agent 让用户在 host 里跑一句:**「ping the minecraft server」**。
 
 不行的话排查顺序:
 
-1. **`AGENT_LINK_TOKEN is required`** → host 配置里 env 没生效;查路径和重启 host。
-2. **`ECONNREFUSED 127.0.0.1:25580`** → mod 没起来或 Minecraft 服务器没启动。让用户启动服务器并看日志里有没有 `agent-link listening on 127.0.0.1:25580`。
-3. **`INVALID_TOKEN`** → token 复制错了,或者用户清空了重新生成。重做 Step 4。
-4. **socket closed (4401)** → 同上,token 错了。
-5. **跨机时 `ECONNREFUSED` 但本机能连** → `allow_remote` 没改成 true,或者防火墙拦了 25580。
+1. **`401 Unauthorized`** → token 复制错了,或者 host 配置 header 没生效。重做 Step 2 / Step 3。
+2. **`403 Forbidden, Origin not allowed`** → host 发的 Origin 头不在 allowlist。让用户把对应 origin 加进 `mcp_allowed_origins` 重启。
+3. **`ECONNREFUSED <host>:25581`** → mod 没起来,或者 `mcp_enabled = false`,或者跨机时没改 `allow_remote = true`。
+4. **mod 起了但 :25581 不通** → 看服务器日志有没有 `MCP HTTP failed to start`(端口被占等)。
+5. **跨机时 :25580 通但 :25581 不通** → 防火墙单独拦了 25581。
 
 ## 装 spark(可选,强烈推荐)
 
@@ -173,7 +154,7 @@ agent 给用户一个汇总:
 
 - [ ] mod jar 已在 `<server>/mods/`
 - [ ] 服务器已启动过一次,`config/agent-link.toml` 已生成
-- [ ] MCP host 配置已写,`AGENT_LINK_URL` 和 `AGENT_LINK_TOKEN` 正确
+- [ ] MCP host 配置已写,url 和 Bearer token 正确
 - [ ] `ping` 工具调用成功
 - [ ] (可选)spark mod 已装,`spark_status` 返回 `installed: true`
 
@@ -189,22 +170,11 @@ agent 给用户一个汇总:
 
 ### mod 启动后 Minecraft 直接 crash
 
-读 `<server>/crash-reports/` 里最新那份。常见原因:Forge 版本不匹配(必须 1.20.1)、Java 版本不对(必须 17)、端口 25580 被别的进程占了(改 `agent-link.toml` 里的 `listen_port`)。
+读 `<server>/crash-reports/` 里最新那份。常见原因:Forge 版本不匹配(必须 1.20.1)、Java 版本不对(必须 17)、端口被别的进程占了(改 `agent-link.toml` 里的 `listen_port` 或 `mcp_listen_port`)。
 
 ### 编译 mod 失败:`Could not find me.lucko:spark-api`
 
-Lucko 的 maven 仓库网络问题。重试 `./gradlew shadowJar`,或者临时把 `compileOnly 'me.lucko:spark-api:0.1-SNAPSHOT'` 这一行从 `build.gradle` 注释掉(spark 集成是运行时反射加载的,编译期注释掉只会让 IDE 红,不影响运行;**注释掉之后** `SparkBridge.java` 里用到 spark API 类型的方法签名也要打开看看,通常 `Class.forName` 调用不会受影响)。
-
-### `npm install` 卡住
-
-国内网络,换镜像:
-
-```bash
-npm config set registry https://registry.npmmirror.com
-npm install
-```
-
-装完可以改回:`npm config set registry https://registry.npmjs.org`。
+Lucko 的 maven 仓库网络问题。重试 `./gradlew shadowJar`,或者临时把 `compileOnly 'me.lucko:spark-api:0.1-SNAPSHOT'` 这一行从 `build.gradle` 注释掉(spark 集成是运行时反射加载的,编译期注释掉只会让 IDE 红,不影响运行)。
 
 ### MCP host 看不到工具
 
@@ -213,3 +183,36 @@ npm install
 ### 工具能调但都返回 `INTERNAL_ERROR`
 
 mod 自身崩了。让用户调 `read_server_file { path: "logs/latest.log" }`(或者直接看那份日志)找 `agent-link tool ... crashed` 的栈。把栈贴给开发者就行。
+
+---
+
+## 附录 A — Node bridge(stdio,兼容路径)
+
+旧 host 不支持 HTTP transport 时使用。需要 Node.js ≥ 20。
+
+构建:
+
+```bash
+cd packages/mcp-server
+npm install
+npm run build
+```
+
+host 配置:
+
+```json
+{
+  "mcpServers": {
+    "minecraft": {
+      "command": "node",
+      "args": ["<dist/index.js 绝对路径>"],
+      "env": {
+        "AGENT_LINK_URL": "ws://127.0.0.1:25580",
+        "AGENT_LINK_TOKEN": "<token>"
+      }
+    }
+  }
+}
+```
+
+bridge 通过 WebSocket 连 :25580,功能与 HTTP 直连等价。两条路径可以同时启用,各自独立。

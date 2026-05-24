@@ -10,6 +10,7 @@ import net.minecraftforge.fml.event.lifecycle.FMLCommonSetupEvent;
 import org.slf4j.Logger;
 import world.agentlink.config.AgentLinkConfig;
 import world.agentlink.transport.AgentLinkServer;
+import world.agentlink.transport.mcp.McpHttpServer;
 
 @Mod(AgentLinkMod.MOD_ID)
 public class AgentLinkMod {
@@ -17,6 +18,7 @@ public class AgentLinkMod {
     public static final Logger LOG = LogUtils.getLogger();
 
     private AgentLinkServer server;
+    private McpHttpServer mcpServer;
 
     public AgentLinkMod() {
         AgentLinkConfig.load();
@@ -36,9 +38,19 @@ public class AgentLinkMod {
         try {
             server.start();
             world.agentlink.events.ForgeEventBridge.serverSupplier = () -> server;
-            LOG.info("agent-link listening on {}:{}",
-                    cfg.allowRemote() ? "0.0.0.0" : "127.0.0.1",
-                    cfg.listenPort());
+            String host = cfg.allowRemote() ? "0.0.0.0" : "127.0.0.1";
+            LOG.info("agent-link listening on {}:{}", host, cfg.listenPort());
+
+            if (cfg.mcpEnabled()) {
+                try {
+                    mcpServer = new McpHttpServer(cfg, server.dispatcher());
+                    mcpServer.start();
+                    LOG.info("agent-link MCP HTTP listening on http://{}:{}/mcp",
+                            host, cfg.mcpListenPort());
+                } catch (Exception e) {
+                    LOG.error("agent-link MCP HTTP failed to start (WebSocket transport still up)", e);
+                }
+            }
         } catch (Exception e) {
             LOG.error("agent-link failed to start", e);
         }
@@ -46,6 +58,13 @@ public class AgentLinkMod {
 
     @SubscribeEvent
     public void onServerStopping(ServerStoppingEvent event) {
+        if (mcpServer != null) {
+            try {
+                mcpServer.stop();
+            } catch (Exception e) {
+                LOG.warn("agent-link MCP HTTP shutdown error", e);
+            }
+        }
         if (server != null) {
             try {
                 server.shutdown();

@@ -1,0 +1,222 @@
+[
+  {
+    "name": "ping",
+    "description": "Liveness probe. Returns the server's uptime in ms.",
+    "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+  },
+  {
+    "name": "run_console_command",
+    "description": "Execute a server console command (op level 4). Returns the captured output. Leading slash is optional.",
+    "inputSchema": {
+      "type": "object",
+      "properties": { "command": { "type": "string", "description": "e.g. \"list\" or \"/say hi\"" } },
+      "required": ["command"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "list_online_players",
+    "description": "List currently online players with name, UUID, ping, and dimension.",
+    "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+  },
+  {
+    "name": "get_player_info",
+    "description": "Detailed info for one online player: position, dimension, health, food, gamemode, ping.",
+    "inputSchema": {
+      "type": "object",
+      "properties": { "name": { "type": "string" } },
+      "required": ["name"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "broadcast",
+    "description": "Send a system message to every online player.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "message": { "type": "string" },
+        "color": {
+          "type": "string",
+          "description": "Optional Minecraft chat color: red, yellow, gold, green, aqua, ..."
+        }
+      },
+      "required": ["message"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "get_server_stats",
+    "description": "TPS, MSPT, memory used/max, loaded chunk count, and player count. Cheap to call.",
+    "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+  },
+  {
+    "name": "get_recent_events",
+    "description": "Pull recent server events (chat, joins, leaves, deaths) on demand. Use this when the user asks what's been happening on the server. Default returns up to 50 most recent events. Pass `since_seq` to fetch only new events since a previous call's `head_seq`. Pass `topics` to filter (e.g. just chat). The mod buffers ~1024 events; older ones are dropped.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "since_seq": {
+          "type": "number",
+          "description": "Only return events with seq > this value. Use the previous call's head_seq for incremental polling. Omit or 0 to get the tail of recent events."
+        },
+        "limit": {
+          "type": "number",
+          "description": "Max events to return (default 50, hard cap 200)."
+        },
+        "topics": {
+          "type": "array",
+          "items": { "type": "string", "enum": ["chat", "player_join", "player_leave", "player_death"] },
+          "description": "Optional filter. Omit to receive all topics."
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "get_recent_logs",
+    "description": "Pull recent server log lines (everything visible in the server console: /say output, mod logs, stack traces). Use this when investigating crashes, errors, or unexpected behavior. Default returns up to 100 most recent lines. Pass `since_seq` for incremental polling, `levels` to filter by severity, or `contains` for substring search. The mod buffers ~2048 lines.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "since_seq": {
+          "type": "number",
+          "description": "Only return logs with seq > this value. Use the previous call's head_seq for incremental polling. Omit or 0 for the tail."
+        },
+        "limit": {
+          "type": "number",
+          "description": "Max lines to return (default 100, hard cap 500)."
+        },
+        "levels": {
+          "type": "array",
+          "items": { "type": "string", "enum": ["TRACE", "DEBUG", "INFO", "WARN", "ERROR", "FATAL"] },
+          "description": "Optional level filter. Case-insensitive on the mod side. Omit for all levels."
+        },
+        "contains": {
+          "type": "string",
+          "description": "Optional substring filter applied to the message."
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "list_mods",
+    "description": "List installed mods (id, version, display name, description). Use this when investigating crashes or compatibility issues — pair with `read_server_file` on `crash-reports/*.txt` and `get_recent_logs`.",
+    "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+  },
+  {
+    "name": "read_server_file",
+    "description": "Read a file under the server root (read-only). Use this for `crash-reports/*.txt`, `logs/*.log`, mod config files, spark output, world settings, etc. Paths are relative to the server root; absolute paths and `..` escapes are rejected. Default cap is 256 KiB; set `max_bytes` up to 4 MiB. Returns base64 if the file is not valid UTF-8.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path": { "type": "string", "description": "e.g. \"crash-reports/crash-2025-01-15.txt\"" },
+        "offset": { "type": "number", "description": "Byte offset to start reading from. Default 0." },
+        "max_bytes": { "type": "number", "description": "Max bytes to read. Default 262144, hard cap 4194304." }
+      },
+      "required": ["path"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "list_dir",
+    "description": "List the contents of a directory under the server root. Pass an empty string or \".\" to list the server root. Returns each entry's name, is_dir, size (for files), and mtime_ms. Default cap is 500 entries.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path": { "type": "string", "description": "Server-root-relative directory; e.g. \"crash-reports\", \"config\", or \"\" for root." },
+        "max_entries": { "type": "number", "description": "Default 500, hard cap 5000." }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "write_config_file",
+    "description": "Write a file under the server root, gated by the operator's `write_allow` / `write_deny` glob lists in `config/agent-link.toml` (default: only `config/**` is writable). If the file already exists, the prior contents are auto-backed-up to `config/.agent-link-backup/<encoded-path>.<timestamp>.bak` before being overwritten. Set `overwrite: true` to replace an existing file. If you get `INVALID_ARGS` mentioning write_allow/write_deny, the path isn't permitted by the operator's policy — explain to the user, don't try to bypass.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path": { "type": "string", "description": "Server-root-relative path. Default policy allows `config/**` only; the operator may have widened or narrowed this." },
+        "content": { "type": "string", "description": "File contents. UTF-8 string by default; pass base64 if `encoding: \"base64\"`." },
+        "encoding": { "type": "string", "enum": ["utf-8", "base64"], "description": "Default utf-8." },
+        "overwrite": { "type": "boolean", "description": "Default false. Required true to replace an existing file." }
+      },
+      "required": ["path", "content"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "tick_profile",
+    "description": "Tick-time distribution over the last ~100 ticks (avg / p50 / p95 / p99 / max in mspt, plus tps). Use this when investigating lag — it reveals whether 19.5 TPS is steady-state or hides spikes. Pair with `thread_dump` to find what's blocking the server thread, or with `/spark profiler` for sampled flame graphs.",
+    "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+  },
+  {
+    "name": "thread_dump",
+    "description": "JVM thread dump (name, state, top stack frames per thread). Pair with `tick_profile` to see what `Server thread` is doing when mspt is high. Default 30 frames per thread; set `only_server: true` to filter to threads with 'Server' in the name.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "max_frames": { "type": "number", "description": "Frames per thread. Default 30, hard cap 200." },
+        "only_server": { "type": "boolean", "description": "Only include threads whose name contains 'Server'." }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "spark_status",
+    "description": "Probe whether the spark profiler mod (https://spark.lucko.me) is installed. Always succeeds — never errors. Returns `installed`, `command_available`, `api_available`, and (when present) the current profiler info string. Call this first before any other spark_* tool; if `installed: false`, fall back on `tick_profile` and `thread_dump` and tell the user spark would give better data.",
+    "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+  },
+  {
+    "name": "spark_stats",
+    "description": "Multi-window TPS / MSPT / CPU (process+system) / GC stats from the spark Java API. More detailed than `tick_profile` (which only sees the engine's 100-tick rolling average). Returns SPARK_UNAVAILABLE if spark isn't installed.",
+    "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+  },
+  {
+    "name": "spark_profiler_start",
+    "description": "Start a spark profiler sample. Non-blocking — returns once spark accepts the command. Pair with `spark_profiler_stop` after letting the sample run (~30-60s) to retrieve a viewer URL. Set `timeout` for hands-off operation (recommended): the profiler auto-stops and uploads. Call `spark_status` first to verify spark is installed.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "timeout": { "type": "number", "description": "Auto-stop after N seconds (1-3600). Recommended for hands-off use." },
+        "interval_ms": { "type": "number", "description": "Sample interval in ms. Default ~4ms; raise to reduce overhead." },
+        "only_ticks_over_ms": { "type": "number", "description": "Only record ticks slower than this (ms). Useful for spike hunting." },
+        "thread_all": { "type": "boolean", "description": "Sample every thread, not just Server thread." },
+        "alloc": { "type": "boolean", "description": "Allocation profile instead of CPU. Heavier." }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "spark_profiler_stop",
+    "description": "Stop the active spark profiler and wait briefly for the upload to finish, then return the viewer URL. spark uploads asynchronously — the URL appears via the captured chat output, not the immediate command return. Default wait is 15s; raise `wait_url_ms` for slow networks. If `url_present: false`, the upload is still in flight.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "comment": { "type": "string", "description": "Optional comment to attach to the sample (visible in viewer)." },
+        "save_to_file": { "type": "boolean", "description": "Save the sample locally instead of uploading. Pair with `read_server_file` on `spark/`." },
+        "wait_url_ms": { "type": "number", "description": "How long to wait for the upload URL (default 15000, max 60000)." }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "spark_profiler_cancel",
+    "description": "Cancel the active spark profiler without uploading. Use to abort a sample you no longer need.",
+    "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+  },
+  {
+    "name": "spark_health_report",
+    "description": "Generate a spark health report (TPS, CPU, memory, disk) and upload it for a shareable URL. Cheaper than a profiler sample — use this for a quick \"how's the server doing\" snapshot. Set `memory: true` and/or `network: true` for extra sections.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "memory": { "type": "boolean", "description": "Include detailed memory breakdown." },
+        "network": { "type": "boolean", "description": "Include network stats." },
+        "wait_url_ms": { "type": "number", "description": "How long to wait for the upload URL (default 10000, max 60000)." }
+      },
+      "additionalProperties": false
+    }
+  }
+]

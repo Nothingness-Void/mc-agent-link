@@ -27,16 +27,25 @@ Full wire-protocol fields, error codes, and sandbox boundaries: [docs/protocol.m
 ## Architecture
 
 ```
- ┌──────────────────────┐    stdio      ┌──────────────────────┐    WebSocket    ┌─────────────────────────────┐
- │  Agent (Claude Code, │ ◄──────────►  │  mcp-server (Node)   │ ◄────────────►  │  Forge mod (Java)           │
- │  Cursor, custom...)  │   MCP         │  packages/mcp-server │   agent-link    │  minecraft/forge-mod        │
- └──────────────────────┘               └──────────────────────┘   protocol      └─────────────────────────────┘
-                                                                                  in-process WS server inside MC
+ ┌──────────────────────┐    Streamable HTTP   ┌─────────────────────────────┐
+ │  Agent (Claude Code, │ ───────────────────► │  Forge mod (Java)           │
+ │  Cursor, custom...)  │   POST /mcp + JSON   │  minecraft/forge-mod        │
+ └──────────────────────┘   Bearer auth        │  in-process inside MC JVM   │
+                                               └─────────────────────────────┘
+                                                  │
+                                                  │ also exposes
+                                                  ▼
+                            ┌──────────────────────────────────────┐
+                            │  WebSocket :25580 (non-MCP clients)  │
+                            │  + Node bridge (legacy host fallback)│
+                            └──────────────────────────────────────┘
 ```
 
-- **Forge mod** runs *inside* the Minecraft server JVM, exposing a local WebSocket endpoint. All work is dispatched on the main server thread to stay thread-safe with the world state.
-- **MCP server** is a thin Node.js process. It speaks the agent-link protocol on one side and MCP on the other. One mod can serve many agents through one bridge.
-- **Multi-agent**: the mod accepts N concurrent WebSocket connections. The bridge multiplexes MCP hosts.
+- **Forge mod** runs *inside* the Minecraft server JVM and listens on two sockets:
+  - `:25581/mcp` — MCP Streamable HTTP. Hosts (Claude Code, Cursor, …) connect directly.
+  - `:25580` — agent-link WebSocket protocol for non-MCP clients (moderation bots, the stdio bridge).
+- All work is dispatched on the main server thread to stay thread-safe with world state.
+- **Multi-agent**: HTTP and WebSocket each accept many concurrent connections.
 
 ## Repo layout
 
@@ -48,7 +57,7 @@ mc-agent-link/
 ├── minecraft/
 │   └── forge-mod/             # Forge 1.20.1 mod (Java 17, Gradle)
 ├── packages/
-│   └── mcp-server/            # Node MCP bridge (TypeScript)
+│   └── mcp-server/            # Node MCP bridge (TypeScript, stdio fallback)
 └── INSTALL.md                 # Step-by-step install guide (designed to be read by an agent)
 ```
 
@@ -56,7 +65,7 @@ mc-agent-link/
 
 Three steps:
 
-1. **Install the mod**: drop `agent-link-forge-1.20.1-0.1.0.jar` into your server's `mods/` directory and start the server once.
+1. **Install the mod**: drop `agent-link-forge-1.20.1-*.jar` into your server's `mods/` directory and start the server once.
 2. **Get the token**: it's generated in `<server>/config/agent-link.toml` after first start. The console also prints `agent-link generated token: ...` once.
 3. **Configure your MCP host** (Claude Code example, in `~/.claude.json` or project `.mcp.json`):
 
@@ -64,24 +73,25 @@ Three steps:
    {
      "mcpServers": {
        "minecraft": {
-         "command": "node",
-         "args": ["/abs/path/to/mc-agent-link/packages/mcp-server/dist/index.js"],
-         "env": {
-           "AGENT_LINK_URL": "ws://127.0.0.1:25580",
-           "AGENT_LINK_TOKEN": "<token from step 2>"
+         "type": "http",
+         "url": "http://127.0.0.1:25581/mcp",
+         "headers": {
+           "Authorization": "Bearer <token from step 2>"
          }
        }
      }
    }
    ```
 
-For remote servers, replace `127.0.0.1` with the server's IP and set `allow_remote = true` in `agent-link.toml` (then restart).
+For remote servers, replace `127.0.0.1` with the server's IP, set `allow_remote = true` in `agent-link.toml`, narrow `mcp_allowed_origins` to your trusted clients, and restart.
+
+**Older host that doesn't support HTTP transport?** The Node bridge in `packages/mcp-server` still works over stdio + WebSocket — see [INSTALL.md Appendix A](INSTALL.md#附录-a--node-bridgestdio兼容路径).
 
 **Want an agent to install it for you?** Hand it [INSTALL.md](INSTALL.md) — it's written to be self-executing.
 
 ## How agents discover what to do
 
-The MCP bridge ships an `instructions` string in its `initialize` response. Any compliant host (Claude Code, Cursor, Zed) feeds it to the model automatically — agents see a description of the server, the tool grouping, and the recommended diagnosis loop without any extra prompt engineering.
+The mod ships an `instructions` string in its `initialize` response (both HTTP and the bridge surface the same text). Any compliant host (Claude Code, Cursor, Zed) feeds it to the model automatically — agents see a description of the server, the tool grouping, and the recommended diagnosis loop without any extra prompt engineering.
 
 The repo also ships four Claude Code skills (under `.claude/skills/`, committed in-repo):
 

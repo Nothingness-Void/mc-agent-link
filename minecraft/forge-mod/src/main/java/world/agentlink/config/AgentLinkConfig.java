@@ -23,12 +23,17 @@ public final class AgentLinkConfig {
             String token,
             List<String> writeAllow,
             List<String> writeDeny,
+            boolean mcpEnabled,
+            int mcpListenPort,
+            List<String> mcpAllowedOrigins,
             String version
     ) {}
 
     private static final String FILE_NAME = "agent-link.toml";
     private static final List<String> DEFAULT_WRITE_ALLOW = List.of("config/**");
     private static final List<String> DEFAULT_WRITE_DENY = List.of();
+    private static final List<String> DEFAULT_MCP_ALLOWED_ORIGINS =
+            List.of("null", "http://localhost", "http://127.0.0.1");
     private static Snapshot CURRENT;
 
     private AgentLinkConfig() {}
@@ -52,6 +57,10 @@ public final class AgentLinkConfig {
             List<String> writeAllow = readStringList(cfg, "write_allow", DEFAULT_WRITE_ALLOW);
             List<String> writeDeny = readStringList(cfg, "write_deny", DEFAULT_WRITE_DENY);
 
+            boolean mcpEnabled = cfg.getOrElse("mcp_enabled", true);
+            int mcpPort = cfg.getIntOrElse("mcp_listen_port", 25581);
+            List<String> mcpAllowedOrigins = readStringList(cfg, "mcp_allowed_origins", DEFAULT_MCP_ALLOWED_ORIGINS);
+
             if (token.isBlank()) {
                 token = generateToken();
                 cfg.set("token", token);
@@ -74,8 +83,23 @@ public final class AgentLinkConfig {
                     " regardless of write_allow. Use to carve out exceptions, e.g. [\"config/security/**\"].\n" +
                     " Default: [] (nothing extra denied).");
 
+            cfg.set("mcp_enabled", mcpEnabled);
+            cfg.setComment("mcp_enabled",
+                    "\n MCP HTTP transport. Lets MCP hosts (Claude Code, Cursor, ...) connect directly without the Node bridge.\n" +
+                    " Default: true. Set to false if you only use the WebSocket transport.");
+            cfg.set("mcp_listen_port", mcpPort);
+            cfg.setComment("mcp_listen_port",
+                    "\n Port for the MCP HTTP endpoint (POST /mcp). Default 25581.\n" +
+                    " Binds the same host as listen_port (127.0.0.1 unless allow_remote is true).");
+            cfg.set("mcp_allowed_origins", mcpAllowedOrigins);
+            cfg.setComment("mcp_allowed_origins",
+                    "\n Origin header allowlist for MCP HTTP. Browsers send Origin; native MCP hosts usually do not (or send \"null\").\n" +
+                    " Default: [\"null\", \"http://localhost\", \"http://127.0.0.1\"] — safe for local hosts.\n" +
+                    " If allow_remote = true, narrow this to your trusted clients to prevent DNS-rebinding attacks.");
+
             cfg.save();
-            CURRENT = new Snapshot(port, allowRemote, token, writeAllow, writeDeny, "0.1.1-alpha");
+            CURRENT = new Snapshot(port, allowRemote, token, writeAllow, writeDeny,
+                    mcpEnabled, mcpPort, mcpAllowedOrigins, "0.1.1-alpha");
 
             if (fresh) {
                 AgentLinkMod.LOG.info("agent-link wrote default config to {}", path);
