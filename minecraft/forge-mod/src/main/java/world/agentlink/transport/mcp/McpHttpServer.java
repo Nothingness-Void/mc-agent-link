@@ -21,6 +21,9 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 /**
  * MCP Streamable HTTP transport using JDK's built-in {@link HttpServer}. Single endpoint
@@ -42,8 +45,9 @@ public final class McpHttpServer implements HttpHandler {
     private final InetSocketAddress address;
     private final String publicMcpUrl;
     private final String publicPairUrl;
-    private final String pairCode;
-    private final long pairExpiresAtMs;
+    private final ScheduledExecutorService pairRefreshExecutor;
+    private String pairCode;
+    private long pairExpiresAtMs;
     private boolean pairConsumed;
     private HttpServer server;
 
@@ -56,8 +60,12 @@ public final class McpHttpServer implements HttpHandler {
         String publicHost = "127.0.0.1";
         this.publicMcpUrl = "http://" + publicHost + ":" + cfg.mcpListenPort() + ENDPOINT;
         this.publicPairUrl = "http://" + publicHost + ":" + cfg.mcpListenPort() + PAIR_ENDPOINT;
-        this.pairCode = generatePairCode();
-        this.pairExpiresAtMs = System.currentTimeMillis() + PAIR_CODE_TTL_SECONDS * 1000L;
+        this.pairRefreshExecutor = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "agent-link-pair-refresh");
+            t.setDaemon(true);
+            return t;
+        });
+        rotatePairCode();
     }
 
     public void start() throws IOException {
@@ -70,20 +78,22 @@ public final class McpHttpServer implements HttpHandler {
             return t;
         }));
         server.start();
+        schedulePairRefresh();
     }
 
-    public void stop() {
+    public synchronized void stop() {
         if (server != null) {
             server.stop(2);
             server = null;
         }
+        pairRefreshExecutor.shutdownNow();
     }
 
     public InetSocketAddress address() {
         return address;
     }
 
-    public String setupLink() {
+    public synchronized String setupLink() {
         JsonObject payload = new JsonObject();
         payload.addProperty("v", 1);
         payload.addProperty("repo", SETUP_LINK_BASE);
@@ -98,7 +108,7 @@ public final class McpHttpServer implements HttpHandler {
         return SETUP_LINK_BASE + "#agent-link-setup=" + encoded;
     }
 
-    public long pairExpiresAtMs() {
+    public synchronized long pairExpiresAtMs() {
         return pairExpiresAtMs;
     }
 
@@ -262,6 +272,33 @@ public final class McpHttpServer implements HttpHandler {
         result.add("server", server);
         result.addProperty("mcp_host_hint", "Add this object under mcpServers.minecraft in your MCP host config.");
         return result;
+    }
+
+    private synchronized void rotatePairCode() {
+        pairCode = generatePairCode();
+        pairExpiresAtMs = System.currentTimeMillis() + PAIR_CODE_TTL_SECONDS * 1000L;
+    }
+
+    private void refreshPairCodeIfNeeded() {
+        String link;
+        long expires;
+        synchronized (this) {
+            if (pairConsumed || server == null) return;
+            rotatePairCode();
+            link = setupLink();
+            expires = pairExpiresAtMs;
+        }
+        AgentLinkMod.LOG.info("agent-link setup link refreshed (send this to your AI agent, one use, expires at {}): {}",
+                Instant.ofEpochMilli(expires), link);
+        schedulePairRefresh();
+    }
+
+    private void schedulePairRefresh() {
+        try {
+            pairRefreshExecutor.schedule(this::refreshPairCodeIfNeeded,
+                    PAIR_CODE_TTL_SECONDS, TimeUnit.SECONDS);
+        } catch (RejectedExecutionException ignored) {
+        }
     }
 
     private boolean originAllowed(String origin) {
