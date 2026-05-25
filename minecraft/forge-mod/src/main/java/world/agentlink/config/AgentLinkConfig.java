@@ -7,8 +7,10 @@ import world.agentlink.AgentLinkMod;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.SecureRandom;
+import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.UUID;
 
 /**
  * Loaded once on mod init. Hand-rolled instead of Forge's ForgeConfigSpec because
@@ -26,6 +28,13 @@ public final class AgentLinkConfig {
             boolean mcpEnabled,
             int mcpListenPort,
             List<String> mcpAllowedOrigins,
+            boolean approvalEnabled,
+            int approvalTimeoutSeconds,
+            List<String> approvalAutoAllowTools,
+            List<String> approvalTrustedTools,
+            List<String> approvalAdminOnlyTools,
+            List<UUID> roleAdminUuids,
+            List<UUID> roleGuestUuids,
             String version
     ) {}
 
@@ -34,7 +43,31 @@ public final class AgentLinkConfig {
     private static final List<String> DEFAULT_WRITE_DENY = List.of();
     private static final List<String> DEFAULT_MCP_ALLOWED_ORIGINS =
             List.of("null", "http://localhost", "http://127.0.0.1");
-    private static Snapshot CURRENT;
+    private static final List<String> DEFAULT_APPROVAL_AUTO_ALLOW_TOOLS = List.of(
+            // Protocol / queue layer.
+            "ping", "agent_heartbeat", "get_agent_requests",
+            "update_agent_request_status", "reply_agent_request",
+            // Read-only world / server state — safe for "ordinary OP" use.
+            "list_online_players", "get_player_info", "get_player_inventory",
+            "list_mods", "get_server_stats", "get_world_info",
+            "get_block", "get_blocks_region", "get_biome",
+            "raycast", "list_entities_near",
+            "list_dimensions", "list_block_ids", "list_item_ids", "list_entity_ids", "list_biome_ids",
+            // Diagnostics / logs / events.
+            "get_recent_events", "get_recent_logs", "subscribe_events", "unsubscribe_events",
+            "tick_profile", "thread_dump",
+            // Spark read-only.
+            "spark_status", "spark_stats", "spark_health_report"
+    );
+    private static final List<String> DEFAULT_APPROVAL_ADMIN_ONLY_TOOLS = List.of(
+            // High-impact server mutation.
+            "run_console_command", "write_config_file", "broadcast",
+            // Performance-impacting profiler control.
+            "spark_profiler_start", "spark_profiler_stop", "spark_profiler_cancel",
+            // Sensitive filesystem access (can read agent-link.toml token, ops.json, world data).
+            "read_server_file", "list_dir"
+    );
+    private static volatile Snapshot CURRENT;
 
     private AgentLinkConfig() {}
 
@@ -60,6 +93,13 @@ public final class AgentLinkConfig {
             boolean mcpEnabled = cfg.getOrElse("mcp_enabled", true);
             int mcpPort = cfg.getIntOrElse("mcp_listen_port", 25581);
             List<String> mcpAllowedOrigins = readStringList(cfg, "mcp_allowed_origins", DEFAULT_MCP_ALLOWED_ORIGINS);
+            boolean approvalEnabled = cfg.getOrElse("approval.enabled", true);
+            int approvalTimeoutSeconds = Math.max(5, cfg.getIntOrElse("approval.timeout_seconds", 60));
+            List<String> approvalAutoAllowTools = readStringList(cfg, "approval.auto_allow_tools", DEFAULT_APPROVAL_AUTO_ALLOW_TOOLS);
+            List<String> approvalTrustedTools = readStringList(cfg, "approval.trusted_tools", List.of());
+            List<String> approvalAdminOnlyTools = readStringList(cfg, "approval.admin_only_tools", DEFAULT_APPROVAL_ADMIN_ONLY_TOOLS);
+            List<UUID> roleAdminUuids = readUuidList(cfg, "roles.admin_uuids");
+            List<UUID> roleGuestUuids = readUuidList(cfg, "roles.guest_uuids");
 
             if (token.isBlank()) {
                 token = generateToken();
@@ -97,9 +137,48 @@ public final class AgentLinkConfig {
                     " Default: [\"null\", \"http://localhost\", \"http://127.0.0.1\"] — safe for local hosts.\n" +
                     " If allow_remote = true, narrow this to your trusted clients to prevent DNS-rebinding attacks.");
 
+            cfg.set("approval.enabled", approvalEnabled);
+            cfg.setComment("approval.enabled", " In-game MCP tool approval. When true, non-auto-allowed tools wait for in-game chat approval.");
+            cfg.set("approval.timeout_seconds", approvalTimeoutSeconds);
+            cfg.setComment("approval.timeout_seconds", " Seconds before a pending in-game tool approval is denied automatically.");
+            cfg.set("approval.auto_allow_tools", approvalAutoAllowTools);
+            cfg.setComment("approval.auto_allow_tools",
+                    "\n Tier 1: tools that bypass in-game approval entirely. Default = read-only world / server / log / spark-status\n" +
+                    " inspection that ordinary OPs already have access to in vanilla. Add \"*\" only if you trust the MCP host fully.");
+            cfg.set("approval.trusted_tools", approvalTrustedTools);
+            cfg.setComment("approval.trusted_tools",
+                    "\n Tier 2: rules trusted via the in-game [始终允许该工具] / [始终允许该命令] buttons.\n" +
+                    " Two forms are accepted:\n" +
+                    "   \"tool_name\"                    — every call to that tool is auto-approved.\n" +
+                    "   \"tool_name(arg=glob)\"          — only calls whose JSON arg matches the glob are auto-approved.\n" +
+                    " Glob: * = any chars, ? = one char. Example: \"run_console_command(command=say *)\".\n" +
+                    " Auto-grown by the in-game buttons. Edit or clear this list to revoke.");
+            cfg.set("approval.admin_only_tools", approvalAdminOnlyTools);
+            cfg.setComment("approval.admin_only_tools",
+                    "\n Tier 4: tools that ONLY [roles].admin_uuids may even REQUEST. A non-admin invocation is rejected immediately\n" +
+                    " (no approval prompt sent). Default covers anything that mutates the server, runs console commands, or reads sensitive\n" +
+                    " filesystem state (read_server_file / list_dir can leak ops.json or this very token file).\n" +
+                    " Tools NOT in any of these three lists fall through to Tier 3: still gated by an in-game approval prompt that any\n" +
+                    " admin / OP can click.");
+
+            cfg.set("roles.admin_uuids", uuidsAsStrings(roleAdminUuids));
+            cfg.setComment("roles.admin_uuids",
+                    "\n Server admins (\"腐竹\"). Player UUIDs listed here are the only ones who can click [允许一次]/[拒绝]\n" +
+                    " on in-game MCP tool approval prompts AND the only ones who may invoke approval.admin_only_tools.\n" +
+                    " Empty list = fall back to ALL online OPs (legacy behavior; admin_only_tools cannot be enforced and will be denied for everyone).");
+            cfg.set("roles.guest_uuids", uuidsAsStrings(roleGuestUuids));
+            cfg.setComment("roles.guest_uuids",
+                    "\n Explicit guests. Optional — when empty, anyone NOT in admin_uuids is treated as guest by add-on mods.\n" +
+                    " Use this list to mark specific players as \"chat-only\", e.g. for trusted but non-admin testers.");
+
             cfg.save();
             CURRENT = new Snapshot(port, allowRemote, token, writeAllow, writeDeny,
-                    mcpEnabled, mcpPort, mcpAllowedOrigins, "0.1.6-alpha");
+                    mcpEnabled, mcpPort, mcpAllowedOrigins,
+                    approvalEnabled, approvalTimeoutSeconds, approvalAutoAllowTools, approvalTrustedTools,
+                    java.util.Collections.unmodifiableList(approvalAdminOnlyTools),
+                    java.util.Collections.unmodifiableList(roleAdminUuids),
+                    java.util.Collections.unmodifiableList(roleGuestUuids),
+                    "0.2.3-alpha");
 
             if (fresh) {
                 AgentLinkMod.LOG.info("agent-link wrote default config to {}", path);
@@ -116,6 +195,92 @@ public final class AgentLinkConfig {
         }
         AgentLinkMod.LOG.warn("agent-link: config key '{}' is not a list; using default", key);
         return fallback;
+    }
+
+    private static List<UUID> readUuidList(CommentedFileConfig cfg, String key) {
+        Object raw = cfg.get(key);
+        if (raw == null) return new ArrayList<>();
+        if (!(raw instanceof List<?> list)) {
+            AgentLinkMod.LOG.warn("agent-link: config key '{}' is not a list; ignoring", key);
+            return new ArrayList<>();
+        }
+        List<UUID> out = new ArrayList<>();
+        for (Object item : list) {
+            if (item == null) continue;
+            String text = String.valueOf(item).trim();
+            if (text.isEmpty()) continue;
+            try {
+                UUID u = UUID.fromString(text);
+                if (!out.contains(u)) out.add(u);
+            } catch (IllegalArgumentException ex) {
+                AgentLinkMod.LOG.warn("agent-link: ignoring invalid UUID in {}: {}", key, text);
+            }
+        }
+        return out;
+    }
+
+    private static List<String> uuidsAsStrings(List<UUID> uuids) {
+        List<String> out = new ArrayList<>(uuids.size());
+        for (UUID u : uuids) out.add(u.toString());
+        return out;
+    }
+
+    public static synchronized void addApprovalTrustedTool(String ruleString) {
+        if (ruleString == null || ruleString.isBlank()) return;
+        Path path = FMLPaths.CONFIGDIR.get().resolve(FILE_NAME);
+        try (CommentedFileConfig cfg = CommentedFileConfig.builder(path)
+                .preserveInsertionOrder()
+                .build()) {
+            cfg.load();
+            List<String> trusted = readStringList(cfg, "approval.trusted_tools", List.of());
+            if (!trusted.contains(ruleString)) {
+                trusted = new java.util.ArrayList<>(trusted);
+                trusted.add(ruleString);
+                cfg.set("approval.trusted_tools", trusted);
+                cfg.save();
+            }
+            Snapshot snap = CURRENT;
+            if (snap != null) {
+                CURRENT = new Snapshot(snap.listenPort(), snap.allowRemote(), snap.token(),
+                        snap.writeAllow(), snap.writeDeny(), snap.mcpEnabled(),
+                        snap.mcpListenPort(), snap.mcpAllowedOrigins(), snap.approvalEnabled(),
+                        snap.approvalTimeoutSeconds(), snap.approvalAutoAllowTools(), trusted,
+                        snap.approvalAdminOnlyTools(),
+                        snap.roleAdminUuids(), snap.roleGuestUuids(),
+                        snap.version());
+            }
+        }
+    }
+
+    public static synchronized boolean removeApprovalTrustedTool(String ruleString) {
+        if (ruleString == null || ruleString.isBlank()) return false;
+        Path path = FMLPaths.CONFIGDIR.get().resolve(FILE_NAME);
+        boolean removed;
+        List<String> trusted;
+        try (CommentedFileConfig cfg = CommentedFileConfig.builder(path)
+                .preserveInsertionOrder()
+                .build()) {
+            cfg.load();
+            trusted = new java.util.ArrayList<>(readStringList(cfg, "approval.trusted_tools", List.of()));
+            removed = trusted.removeIf(s -> s.equalsIgnoreCase(ruleString));
+            if (removed) {
+                cfg.set("approval.trusted_tools", trusted);
+                cfg.save();
+            }
+        }
+        if (removed) {
+            Snapshot snap = CURRENT;
+            if (snap != null) {
+                CURRENT = new Snapshot(snap.listenPort(), snap.allowRemote(), snap.token(),
+                        snap.writeAllow(), snap.writeDeny(), snap.mcpEnabled(),
+                        snap.mcpListenPort(), snap.mcpAllowedOrigins(), snap.approvalEnabled(),
+                        snap.approvalTimeoutSeconds(), snap.approvalAutoAllowTools(), trusted,
+                        snap.approvalAdminOnlyTools(),
+                        snap.roleAdminUuids(), snap.roleGuestUuids(),
+                        snap.version());
+            }
+        }
+        return removed;
     }
 
     private static String generateToken() {
