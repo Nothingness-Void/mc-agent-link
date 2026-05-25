@@ -17,6 +17,7 @@ Modern AI agents (Claude Code, Cursor, custom agents) speak MCP. Minecraft serve
 | Group | Tools | Purpose |
 |---|---|---|
 | Operations | `ping` `run_console_command` `list_online_players` `get_player_info` `broadcast` `get_server_stats` | Run console commands, query players, broadcast |
+| In-game request API | `agent_heartbeat` `get_agent_requests` `update_agent_request_status` `reply_agent_request` | The base mod provides the queue and MCP API; the in-game `/agent` command is provided by the optional `mc-agent-link-agent` addon |
 | Observation (pull) | `get_recent_events` `get_recent_logs` | Recent chat / join / leave / death events and the full server console log |
 | Diagnosis | `tick_profile` `thread_dump` `list_mods` | Tick distribution, JVM thread dump, installed mods |
 | Filesystem (sandboxed) | `list_dir` `read_server_file` `write_config_file` | Read anywhere under server root; writes are limited to `config/**` with auto-backup |
@@ -66,16 +67,16 @@ mc-agent-link/
 Foolproof path:
 
 1. **Install the mod**: drop `agent-link-forge-1.20.1-*.jar` into your server's `mods/` directory and start the server.
-2. **Copy the setup link**: the console prints an `agent-link setup link (...)` line. It is one-use and valid for 10 minutes; if pairing has not succeeded, the mod refreshes and prints a new link automatically.
+2. **Copy the setup link**: the console prints an `agent-link setup link (...)` line. It is one-use and valid for 10 minutes; if pairing has not succeeded, the mod refreshes and prints a new link automatically. OPs or the console can also run `/agentlink pair` to generate a new link immediately.
 3. **Send it to your agent**: paste the full setup link into Claude Code / Cursor / your custom agent. The agent exchanges it through `/pair`, writes the MCP host config, then calls `ping` to verify.
 
 The setup link looks like this:
 
 ```text
-https://github.com/Nothingness-Void/mc-agent-link#agent-link-setup=...
+https://github.com/Nothingness-Void/mc-agent-link/blob/main/AGENTS.md#agent-link-setup=...
 ```
 
-If the pairing code expires, use the latest refreshed setup link from the console. If it has already been used, pairing has already succeeded.
+If the pairing code expires, use the latest refreshed setup link from the console, or run `/agentlink pair` to refresh it manually. If it has already been used, pairing has already succeeded.
 
 For remote servers, set `allow_remote = true` in `agent-link.toml`, narrow `mcp_allowed_origins` to your trusted clients, restart, and make sure your firewall allows `mcp_listen_port`.
 

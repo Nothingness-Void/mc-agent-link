@@ -51,6 +51,17 @@
     "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
   },
   {
+    "name": "agent_heartbeat",
+    "description": "Record that an MCP agent is online/active. Useful for in-game /agent status.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "action": { "type": "string", "description": "Optional short activity label, e.g. polling or diagnosing lag." }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
     "name": "get_agent_requests",
     "description": "Pull OP-created in-game requests submitted with /agent. Use since_seq/head_seq for incremental polling. Requests are queued until the agent replies or marks them done.",
     "inputSchema": {

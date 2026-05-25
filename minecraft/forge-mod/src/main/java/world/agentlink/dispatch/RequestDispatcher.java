@@ -5,6 +5,7 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import net.minecraft.server.MinecraftServer;
 import world.agentlink.AgentLinkMod;
+import world.agentlink.dispatch.tools.AgentHeartbeatTool;
 import world.agentlink.dispatch.tools.BroadcastTool;
 import world.agentlink.dispatch.tools.GetPlayerInfoTool;
 import world.agentlink.dispatch.tools.GetAgentRequestsTool;
@@ -50,6 +51,7 @@ public class RequestDispatcher {
         register(new GetPlayerInfoTool(mc));
         register(new BroadcastTool(mc));
         register(new GetServerStatsTool(mc));
+        register(new AgentHeartbeatTool());
         register(new GetAgentRequestsTool());
         register(new UpdateAgentRequestStatusTool(mc));
         register(new ReplyAgentRequestTool(mc));

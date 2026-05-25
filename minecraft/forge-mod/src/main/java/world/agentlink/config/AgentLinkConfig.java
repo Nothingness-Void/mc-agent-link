@@ -99,7 +99,7 @@ public final class AgentLinkConfig {
 
             cfg.save();
             CURRENT = new Snapshot(port, allowRemote, token, writeAllow, writeDeny,
-                    mcpEnabled, mcpPort, mcpAllowedOrigins, "0.1.5-alpha");
+                    mcpEnabled, mcpPort, mcpAllowedOrigins, "0.1.6-alpha");
 
             if (fresh) {
                 AgentLinkMod.LOG.info("agent-link wrote default config to {}", path);

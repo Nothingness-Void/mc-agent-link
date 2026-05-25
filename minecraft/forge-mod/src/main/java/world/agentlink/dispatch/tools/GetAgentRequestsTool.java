@@ -27,6 +27,7 @@ public class GetAgentRequestsTool implements Tool {
         boolean includeDone = args.has("include_done") && args.get("include_done").getAsBoolean();
 
         AgentRequestBuffer buf = AgentRequestBuffer.get();
+        buf.markAgentSeen("get_agent_requests");
         long effectiveSince = sinceSeq <= 0 ? Math.max(0, buf.head() - limit) : sinceSeq;
         List<AgentRequestBuffer.Entry> entries = buf.since(effectiveSince, limit, includeDone);
         JsonArray arr = buf.toJsonArray(entries);

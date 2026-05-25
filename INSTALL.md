@@ -55,7 +55,7 @@ agent 这一步只能让用户做(除非 agent 有控制服务器进程的能力
 setup link 形如:
 
 ```text
-https://github.com/Nothingness-Void/mc-agent-link#agent-link-setup=eyJ2IjoxLCJtY3BfdXJsIjoi...
+https://github.com/Nothingness-Void/mc-agent-link/blob/main/AGENTS.md#agent-link-setup=eyJ2IjoxLCJtY3BfdXJsIjoi...
 ```
 
 agent 收到后:
@@ -69,6 +69,7 @@ agent 收到后:
 POST /pair
 Accept: application/json
 Content-Type: application/json
+Origin: http://127.0.0.1
 
 {"pair_code":"1234-5678"}
 ```
@@ -89,7 +90,13 @@ Content-Type: application/json
 
 这个 `mcp` 对象就是要写进 MCP host 配置里的 `mcpServers.minecraft`。
 
-setup link **10 分钟内一次性有效**。如果 `/pair` 返回 `401`,说明 code 错了、过期了或已被使用;让用户复制控制台里最新的 refreshed setup link。未配对成功前,mod 会每次过期后自动打印新链接。
+setup link **10 分钟内一次性有效**。如果 `/pair` 返回 `401`,响应体会包含 `reason`:
+
+```json
+{"error":"Invalid or expired pair code","reason":"expired"}
+```
+
+`reason` 可能是 `unknown`、`expired` 或 `used`。未配对成功前,mod 会每次过期后自动打印新链接。
 
 兼容/故障排查时,仍可读 `<server>/config/agent-link.toml` 手动取 token:
 

@@ -16,6 +16,7 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
 import java.util.Locale;
@@ -23,6 +24,7 @@ import java.util.Set;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -36,7 +38,10 @@ public final class McpHttpServer implements HttpHandler {
     private static final String PAIR_ENDPOINT = "/pair";
     private static final int MAX_BODY_BYTES = 128 * 1024;
     private static final int PAIR_CODE_TTL_SECONDS = 10 * 60;
-    private static final String SETUP_LINK_BASE = "https://github.com/Nothingness-Void/mc-agent-link";
+    private static final int MAX_EXPIRED_PAIR_CODES = 8;
+    private static final int MAX_USED_PAIR_CODES = 8;
+    private static final String REPO_URL = "https://github.com/Nothingness-Void/mc-agent-link";
+    private static final String SETUP_LINK_BASE = REPO_URL + "/blob/main/AGENTS.md";
     private static final SecureRandom RANDOM = new SecureRandom();
 
     private final Snapshot cfg;
@@ -46,6 +51,9 @@ public final class McpHttpServer implements HttpHandler {
     private final String publicMcpUrl;
     private final String publicPairUrl;
     private final ScheduledExecutorService pairRefreshExecutor;
+    private final List<String> expiredPairCodes = new ArrayList<>();
+    private final List<String> usedPairCodes = new ArrayList<>();
+    private ScheduledFuture<?> pairRefreshTask;
     private String pairCode;
     private long pairExpiresAtMs;
     private boolean pairConsumed;
@@ -96,7 +104,8 @@ public final class McpHttpServer implements HttpHandler {
     public synchronized String setupLink() {
         JsonObject payload = new JsonObject();
         payload.addProperty("v", 1);
-        payload.addProperty("repo", SETUP_LINK_BASE);
+        payload.addProperty("repo", REPO_URL);
+        payload.addProperty("instructions_url", SETUP_LINK_BASE);
         payload.addProperty("mcp_url", publicMcpUrl);
         payload.addProperty("pair_url", publicPairUrl);
         payload.addProperty("pair_code", pairCode);
@@ -111,6 +120,20 @@ public final class McpHttpServer implements HttpHandler {
     public synchronized long pairExpiresAtMs() {
         return pairExpiresAtMs;
     }
+
+    public SetupLink refreshSetupLink() {
+        SetupLink fresh;
+        synchronized (this) {
+            rotatePairCode();
+            fresh = new SetupLink(setupLink(), pairExpiresAtMs);
+        }
+        AgentLinkMod.LOG.info("agent-link setup link manually refreshed (send this to your AI agent, one use, expires at {}): {}",
+                Instant.ofEpochMilli(fresh.expiresAtMs()), fresh.link());
+        schedulePairRefresh();
+        return fresh;
+    }
+
+    public record SetupLink(String link, long expiresAtMs) {}
 
     @Override
     public void handle(HttpExchange ex) throws IOException {
@@ -237,23 +260,35 @@ public final class McpHttpServer implements HttpHandler {
                 code = body.get("code").getAsString();
             }
 
-            JsonObject result = consumePairCode(code);
-            if (result == null) {
-                writeStatus(ex, 401, "Invalid or expired pair code");
+            PairResult pairResult = consumePairCode(code);
+            if (pairResult.result() == null) {
+                writePairError(ex, pairResult.reason());
                 return;
             }
-            writeJson(ex, 200, result);
+            writeJson(ex, 200, pairResult.result());
         } catch (Exception e) {
             AgentLinkMod.LOG.warn("agent-link pair request crashed", e);
         }
     }
 
-    private synchronized JsonObject consumePairCode(String code) {
-        if (pairConsumed) return null;
-        if (System.currentTimeMillis() > pairExpiresAtMs) return null;
-        if (!constantTimeEquals(code == null ? "" : code.trim(), pairCode)) return null;
+    private record PairResult(JsonObject result, String reason) {}
+
+    private synchronized PairResult consumePairCode(String code) {
+        String normalized = code == null ? "" : code.trim();
+        if (usedPairCodeMatches(normalized)) return new PairResult(null, "used");
+        if (pairConsumed) {
+            if (constantTimeEquals(normalized, pairCode)) return new PairResult(null, "used");
+            return new PairResult(null, "unknown");
+        }
+        if (System.currentTimeMillis() > pairExpiresAtMs) {
+            if (constantTimeEquals(normalized, pairCode)) return new PairResult(null, "expired");
+            return new PairResult(null, expiredPairCodeMatches(normalized) ? "expired" : "unknown");
+        }
+        if (expiredPairCodeMatches(normalized)) return new PairResult(null, "expired");
+        if (!constantTimeEquals(normalized, pairCode)) return new PairResult(null, "unknown");
 
         pairConsumed = true;
+        addUsedPairCode(pairCode);
 
         JsonObject headers = new JsonObject();
         headers.addProperty("Authorization", "Bearer " + cfg.token());
@@ -271,12 +306,44 @@ public final class McpHttpServer implements HttpHandler {
         result.add("mcp", mcp);
         result.add("server", server);
         result.addProperty("mcp_host_hint", "Add this object under mcpServers.minecraft in your MCP host config.");
-        return result;
+        return new PairResult(result, "");
     }
 
     private synchronized void rotatePairCode() {
+        if (pairCode != null && !pairConsumed) addExpiredPairCode(pairCode);
         pairCode = generatePairCode();
         pairExpiresAtMs = System.currentTimeMillis() + PAIR_CODE_TTL_SECONDS * 1000L;
+        pairConsumed = false;
+    }
+
+    private void addExpiredPairCode(String code) {
+        if (code == null || code.isBlank()) return;
+        expiredPairCodes.add(code);
+        while (expiredPairCodes.size() > MAX_EXPIRED_PAIR_CODES) {
+            expiredPairCodes.remove(0);
+        }
+    }
+
+    private boolean expiredPairCodeMatches(String code) {
+        for (String expired : expiredPairCodes) {
+            if (constantTimeEquals(code, expired)) return true;
+        }
+        return false;
+    }
+
+    private void addUsedPairCode(String code) {
+        if (code == null || code.isBlank()) return;
+        usedPairCodes.add(code);
+        while (usedPairCodes.size() > MAX_USED_PAIR_CODES) {
+            usedPairCodes.remove(0);
+        }
+    }
+
+    private boolean usedPairCodeMatches(String code) {
+        for (String used : usedPairCodes) {
+            if (constantTimeEquals(code, used)) return true;
+        }
+        return false;
     }
 
     private void refreshPairCodeIfNeeded() {
@@ -295,8 +362,11 @@ public final class McpHttpServer implements HttpHandler {
 
     private void schedulePairRefresh() {
         try {
-            pairRefreshExecutor.schedule(this::refreshPairCodeIfNeeded,
-                    PAIR_CODE_TTL_SECONDS, TimeUnit.SECONDS);
+            synchronized (this) {
+                if (pairRefreshTask != null) pairRefreshTask.cancel(false);
+                pairRefreshTask = pairRefreshExecutor.schedule(this::refreshPairCodeIfNeeded,
+                        PAIR_CODE_TTL_SECONDS, TimeUnit.SECONDS);
+            }
         } catch (RejectedExecutionException ignored) {
         }
     }
@@ -387,5 +457,12 @@ public final class McpHttpServer implements HttpHandler {
         try (var os = ex.getResponseBody()) {
             os.write(body);
         }
+    }
+
+    private static void writePairError(HttpExchange ex, String reason) throws IOException {
+        JsonObject error = new JsonObject();
+        error.addProperty("error", "Invalid or expired pair code");
+        error.addProperty("reason", reason == null || reason.isBlank() ? "unknown" : reason);
+        writeJson(ex, 401, error);
     }
 }

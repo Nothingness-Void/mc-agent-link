@@ -15,9 +15,10 @@ server is real — actions like `broadcast`, `run_console_command`, and
 - **Observation (pull)**: `get_recent_events` for chat / join / leave / death,
   `get_recent_logs` for the full server console (stack traces included).
   Both use ring buffers and a `since_seq` cursor for incremental polling.
-- **In-game OP requests**: OPs can submit `/agent <request>` from inside the
-  Minecraft server. Poll `get_agent_requests`, acknowledge with
-  `update_agent_request_status`, then answer with `reply_agent_request`.
+- **In-game OP request API**: optional addon mods can submit in-game operator
+  requests to the base mod queue. Call `agent_heartbeat` when active, poll
+  `get_agent_requests`, acknowledge with `update_agent_request_status`, then
+  answer with `reply_agent_request`.
 - **Diagnosis**: `tick_profile` (avg/p50/p95/p99/max mspt),
   `thread_dump` (JVM threads), `list_mods`.
 - **Spark integration** (only if the spark mod is installed — call
@@ -74,6 +75,7 @@ then `read_server_file` on the newest `.txt`. Pair with `list_mods` and
 `since_seq` next call to fetch only what's new. Don't refetch the full tail
 every turn.
 
+`agent_heartbeat` records recent agent activity for in-game request status UIs.
 `get_agent_requests` also returns `head_seq`. If an OP-created request asks for
 lag/crash/status help, handle it like a normal user request and reply back to
 the player with `reply_agent_request`.

@@ -108,6 +108,24 @@ const TOOLS: ToolDef[] = [
   },
   {
     spec: {
+      name: "agent_heartbeat",
+      description: "Record that an MCP agent is online/active. Useful for in-game /agent status.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          action: { type: "string", description: "Optional short activity label, e.g. polling or diagnosing lag." },
+        },
+        additionalProperties: false,
+      },
+    },
+    toAgentLink: (a) => {
+      const args: Record<string, unknown> = {};
+      if (typeof a.action === "string") args.action = a.action;
+      return { tool: "agent_heartbeat", args };
+    },
+  },
+  {
+    spec: {
       name: "get_agent_requests",
       description:
         "Pull OP-created in-game requests submitted with /agent. Use since_seq/head_seq for incremental polling. Requests are queued until the agent replies or marks them done.",
@@ -516,8 +534,8 @@ server is real — actions like \`broadcast\`, \`run_console_command\`, and
 - **Observation (pull)**: \`get_recent_events\` for chat / join / leave / death,
   \`get_recent_logs\` for the full server console (stack traces included).
   Both use ring buffers and a \`since_seq\` cursor for incremental polling.
-- **In-game OP requests**: OPs can submit \`/agent <request>\` from inside the
-  Minecraft server. Poll \`get_agent_requests\`, acknowledge with
+- **In-game OP request API**: optional addon mods can submit in-game operator
+  requests to the base mod queue. Poll \`get_agent_requests\`, acknowledge with
   \`update_agent_request_status\`, then answer with \`reply_agent_request\`.
 - **Diagnosis**: \`tick_profile\` (avg/p50/p95/p99/max mspt),
   \`thread_dump\` (JVM threads), \`list_mods\`.
@@ -581,7 +599,7 @@ to the player with \`reply_agent_request\`.
 `.trim();
 
 const server = new Server(
-  { name: "agent-link", version: "0.1.5-alpha" },
+  { name: "agent-link", version: "0.1.6-alpha" },
   { capabilities: { tools: {} }, instructions: INSTRUCTIONS },
 );
 

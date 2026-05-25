@@ -49,6 +49,8 @@ public final class AgentRequestBuffer {
     private final int capacity;
     private final Entry[] ring;
     private final AtomicLong nextSeq = new AtomicLong(1);
+    private long lastAgentSeenAt;
+    private String lastAgentAction = "";
 
     private AgentRequestBuffer(int capacity) {
         this.capacity = capacity;
@@ -118,6 +120,13 @@ public final class AgentRequestBuffer {
         return updated;
     }
 
+    public synchronized Entry cancel(String id, String message) {
+        Entry e = findById(id);
+        if (e == null) return null;
+        if (e.status() == Status.DONE || e.status() == Status.FAILED || e.status() == Status.CANCELED) return e;
+        return updateStatus(id, Status.CANCELED, message == null || message.isBlank() ? "canceled by operator" : message);
+    }
+
     public synchronized Entry reply(String id, String reply, boolean markDone) {
         Entry e = findById(id);
         if (e == null) return null;
@@ -147,6 +156,32 @@ public final class AgentRequestBuffer {
             if (e != null && e.id().equals(id)) return e;
         }
         return null;
+    }
+
+    public synchronized List<Entry> recent(int limit, boolean includeDone) {
+        long head = head();
+        long start = oldestSeq();
+        List<Entry> out = new ArrayList<>();
+        for (long s = head; s >= start && out.size() < limit; s--) {
+            Entry e = ring[(int) ((s - 1) % capacity)];
+            if (e == null) continue;
+            if (!includeDone && (e.status() == Status.DONE || e.status() == Status.FAILED || e.status() == Status.CANCELED)) continue;
+            out.add(e);
+        }
+        return out;
+    }
+
+    public synchronized void markAgentSeen(String action) {
+        lastAgentSeenAt = System.currentTimeMillis();
+        lastAgentAction = trim(action == null ? "" : action, MAX_STATUS_CHARS);
+    }
+
+    public synchronized long lastAgentSeenAt() {
+        return lastAgentSeenAt;
+    }
+
+    public synchronized String lastAgentAction() {
+        return lastAgentAction;
     }
 
     public JsonObject toJson(Entry e) {

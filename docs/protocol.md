@@ -187,7 +187,7 @@ In addition to the WebSocket protocol above, the mod exposes the same tool surfa
 **Setup link**: on startup the mod logs a one-use setup link valid for 10 minutes. If pairing has not succeeded when it expires, the mod refreshes the pair code and logs a new setup link:
 
 ```text
-https://github.com/Nothingness-Void/mc-agent-link#agent-link-setup=<base64url-json>
+https://github.com/Nothingness-Void/mc-agent-link/blob/main/AGENTS.md#agent-link-setup=<base64url-json>
 ```
 
 The decoded payload is:
@@ -196,6 +196,7 @@ The decoded payload is:
 {
   "v": 1,
   "repo": "https://github.com/Nothingness-Void/mc-agent-link",
+  "instructions_url": "https://github.com/Nothingness-Void/mc-agent-link/blob/main/AGENTS.md",
   "mcp_url": "http://127.0.0.1:25581/mcp",
   "pair_url": "http://127.0.0.1:25581/pair",
   "pair_code": "1234-5678",
@@ -211,6 +212,7 @@ Agents exchange it with:
 POST <pair_url>
 Accept: application/json
 Content-Type: application/json
+Origin: http://127.0.0.1
 
 {"pair_code":"1234-5678"}
 ```
@@ -229,7 +231,13 @@ Success returns the MCP host config block:
 }
 ```
 
-The pair code is consumed after one successful exchange. `401` means invalid, expired, or already used.
+The pair code is consumed after one successful exchange. Failure returns HTTP `401` with a JSON reason:
+
+```json
+{"error":"Invalid or expired pair code","reason":"expired"}
+```
+
+`reason` is one of `unknown`, `expired`, or `used`.
 
 **MCP headers**:
 

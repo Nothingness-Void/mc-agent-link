@@ -7,7 +7,7 @@ If a user sends you this repository link, help them connect their Minecraft serv
 Ask the user for the full `agent-link setup link` printed in the Minecraft server console after installing the Forge mod and starting the server. It looks like:
 
 ```text
-https://github.com/Nothingness-Void/mc-agent-link#agent-link-setup=...
+https://github.com/Nothingness-Void/mc-agent-link/blob/main/AGENTS.md#agent-link-setup=...
 ```
 
 Do not ask the user to paste `config/agent-link.toml` or a raw token unless pairing fails.
@@ -27,6 +27,7 @@ Do not ask the user to paste `config/agent-link.toml` or a raw token unless pair
 POST <pair_url>
 Accept: application/json
 Content-Type: application/json
+Origin: http://127.0.0.1
 
 {"pair_code":"<pair_code>"}
 ```
@@ -35,7 +36,10 @@ Content-Type: application/json
 6. Restart or reload the MCP host if needed.
 7. Verify by calling the `ping` tool.
 
-If `/pair` returns `401`, the code is wrong, expired, or already used. Ask the user to send the latest refreshed setup link from the Minecraft server console.
+If `/pair` returns `401`, read the JSON `reason` field:
+- `expired`: ask the user to send the latest refreshed setup link from the Minecraft server console.
+- `used`: tell the user the setup link was already consumed, possibly by another agent/MCP host, and ask for the latest refreshed setup link if needed.
+- `unknown`: the code is wrong or not recognized; re-check the setup link and ask for a fresh one if pairing still fails.
 
 ## MCP host config shape
 
