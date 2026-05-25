@@ -97,7 +97,24 @@ public final class JsonRpcHandler {
 
     private JsonObject handleListTools() {
         JsonObject result = new JsonObject();
-        result.add("tools", McpToolSpecs.tools());
+        JsonArray tools = McpToolSpecs.tools().deepCopy();
+        for (RequestDispatcher.RegisteredEntry entry : dispatcher.addonTools()) {
+            JsonObject spec = new JsonObject();
+            spec.addProperty("name", entry.fullName());
+            String desc = entry.tool().description();
+            spec.addProperty("description", desc == null ? "" : desc);
+            JsonObject schema = entry.tool().inputSchema();
+            if (schema == null) {
+                JsonObject empty = new JsonObject();
+                empty.addProperty("type", "object");
+                empty.add("properties", new JsonObject());
+                empty.addProperty("additionalProperties", true);
+                schema = empty;
+            }
+            spec.add("inputSchema", schema);
+            tools.add(spec);
+        }
+        result.add("tools", tools);
         return result;
     }
 

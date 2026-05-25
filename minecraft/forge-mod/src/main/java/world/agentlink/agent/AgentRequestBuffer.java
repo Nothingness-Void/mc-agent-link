@@ -6,6 +6,7 @@ import net.minecraft.ChatFormatting;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
+import world.agentlink.i18n.AgentLinkLang;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -124,7 +125,8 @@ public final class AgentRequestBuffer {
         Entry e = findById(id);
         if (e == null) return null;
         if (e.status() == Status.DONE || e.status() == Status.FAILED || e.status() == Status.CANCELED) return e;
-        return updateStatus(id, Status.CANCELED, message == null || message.isBlank() ? "canceled by operator" : message);
+        return updateStatus(id, Status.CANCELED,
+                message == null || message.isBlank() ? AgentLinkLang.tr("agentlink.request.canceled_by_operator") : message);
     }
 
     public synchronized Entry reply(String id, String reply, boolean markDone) {
@@ -140,7 +142,7 @@ public final class AgentRequestBuffer {
                 e.playerUuid(),
                 e.message(),
                 markDone ? Status.DONE : e.status(),
-                markDone ? "done" : e.statusMessage(),
+                markDone ? "" : e.statusMessage(),
                 trim(reply == null ? "" : reply, MAX_REPLY_CHARS)
         );
         ring[(int) ((updated.seq() - 1) % capacity)] = updated;
@@ -228,7 +230,7 @@ public final class AgentRequestBuffer {
         if (player == null) return 0;
         String reply = entry.reply();
         if (reply == null || reply.isBlank()) return 0;
-        player.sendSystemMessage(Component.literal("[Agent] Reply for " + entry.id() + ":").withStyle(ChatFormatting.AQUA));
+        player.sendSystemMessage(Component.literal(AgentLinkLang.tr(player, "agentlink.agent.reply_header", entry.id())).withStyle(ChatFormatting.AQUA));
         List<String> parts = splitForChat(reply);
         for (String part : parts) {
             player.sendSystemMessage(Component.literal(part).withStyle(ChatFormatting.GRAY));
