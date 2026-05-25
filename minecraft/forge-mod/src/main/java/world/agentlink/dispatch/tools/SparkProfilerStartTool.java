@@ -4,6 +4,7 @@ import com.google.gson.JsonObject;
 import net.minecraft.server.MinecraftServer;
 import world.agentlink.dispatch.Tool;
 import world.agentlink.dispatch.ToolException;
+import world.agentlink.i18n.AgentLinkLang;
 import world.agentlink.spark.SparkBridge;
 import world.agentlink.transport.ClientSession;
 
@@ -39,25 +40,25 @@ public class SparkProfilerStartTool implements Tool {
     public JsonObject invoke(JsonObject args, ClientSession session) throws ToolException {
         if (!SparkBridge.isAvailable(mc)) {
             throw new ToolException("SPARK_UNAVAILABLE",
-                    "spark mod not installed. Install it from https://spark.lucko.me to use this tool.");
+                    AgentLinkLang.tr("agentlink.spark.error.not_installed_long"));
         }
 
         StringBuilder cmd = new StringBuilder("profiler start");
         if (args.has("timeout")) {
             int t = args.get("timeout").getAsInt();
             if (t <= 0 || t > 3600) {
-                throw new ToolException("INVALID_ARGS", "timeout must be 1-3600 seconds");
+                throw new ToolException("INVALID_ARGS", AgentLinkLang.tr("agentlink.spark.error.timeout_range"));
             }
             cmd.append(" --timeout ").append(t);
         }
         if (args.has("interval_ms")) {
             double i = args.get("interval_ms").getAsDouble();
-            if (i <= 0 || i > 1000) throw new ToolException("INVALID_ARGS", "interval_ms must be > 0 and <= 1000");
+            if (i <= 0 || i > 1000) throw new ToolException("INVALID_ARGS", AgentLinkLang.tr("agentlink.spark.error.interval_range"));
             cmd.append(" --interval ").append(i);
         }
         if (args.has("only_ticks_over_ms")) {
             int v = args.get("only_ticks_over_ms").getAsInt();
-            if (v < 0) throw new ToolException("INVALID_ARGS", "only_ticks_over_ms must be >= 0");
+            if (v < 0) throw new ToolException("INVALID_ARGS", AgentLinkLang.tr("agentlink.spark.error.only_ticks_over_non_negative"));
             cmd.append(" --only-ticks-over ").append(v);
         }
         if (args.has("thread_all") && args.get("thread_all").getAsBoolean()) {
@@ -72,7 +73,7 @@ public class SparkProfilerStartTool implements Tool {
         JsonObject r = new JsonObject();
         r.addProperty("started", cr.returnValue() >= 0);
         r.addProperty("command", "/spark " + cmd);
-        r.addProperty("output", cr.output());
+        r.addProperty("output", SparkBridge.localizeOutput(cr.output()));
         return r;
     }
 }

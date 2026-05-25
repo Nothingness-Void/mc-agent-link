@@ -4,6 +4,7 @@ import com.google.gson.JsonObject;
 import net.minecraft.server.MinecraftServer;
 import world.agentlink.dispatch.Tool;
 import world.agentlink.dispatch.ToolException;
+import world.agentlink.i18n.AgentLinkLang;
 import world.agentlink.spark.SparkBridge;
 import world.agentlink.transport.ClientSession;
 
@@ -31,7 +32,7 @@ public class SparkProfilerStopTool implements Tool {
     @Override
     public JsonObject invoke(JsonObject args, ClientSession session) throws ToolException {
         if (!SparkBridge.isAvailable(mc)) {
-            throw new ToolException("SPARK_UNAVAILABLE", "spark mod not installed");
+            throw new ToolException("SPARK_UNAVAILABLE", AgentLinkLang.tr("agentlink.spark.error.not_installed"));
         }
 
         long wait = args.has("wait_url_ms") ? args.get("wait_url_ms").getAsLong() : DEFAULT_WAIT;
@@ -52,13 +53,11 @@ public class SparkProfilerStopTool implements Tool {
 
         JsonObject r = new JsonObject();
         r.addProperty("command", "/spark " + cmd);
-        r.addProperty("output", cr.output());
+        r.addProperty("output", SparkBridge.localizeOutput(cr.output()));
         if (cr.url() != null) r.addProperty("url", cr.url());
         r.addProperty("url_present", cr.url() != null);
         if (cr.url() == null) {
-            r.addProperty("hint",
-                    "spark may still be uploading; the URL appears asynchronously. " +
-                    "Try again with a larger wait_url_ms, or check `/spark activity` via run_console_command.");
+            r.addProperty("hint", AgentLinkLang.tr("agentlink.spark.hint.upload_pending"));
         }
         return r;
     }

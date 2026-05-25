@@ -4,6 +4,7 @@ import com.google.gson.JsonObject;
 import net.minecraft.server.MinecraftServer;
 import world.agentlink.dispatch.Tool;
 import world.agentlink.dispatch.ToolException;
+import world.agentlink.i18n.AgentLinkLang;
 import world.agentlink.spark.SparkBridge;
 import world.agentlink.transport.ClientSession;
 
@@ -26,11 +27,11 @@ public class SparkProfilerCancelTool implements Tool {
     @Override
     public JsonObject invoke(JsonObject args, ClientSession session) throws ToolException {
         if (!SparkBridge.isAvailable(mc)) {
-            throw new ToolException("SPARK_UNAVAILABLE", "spark mod not installed");
+            throw new ToolException("SPARK_UNAVAILABLE", AgentLinkLang.tr("agentlink.spark.error.not_installed"));
         }
         SparkBridge.CommandResult cr = SparkBridge.runSpark(mc, "profiler cancel", OUTPUT_WAIT_MS);
         JsonObject r = new JsonObject();
-        r.addProperty("output", cr.output());
+        r.addProperty("output", SparkBridge.localizeOutput(cr.output()));
         r.addProperty("cancelled", cr.returnValue() >= 0);
         return r;
     }

@@ -4,6 +4,7 @@ import com.google.gson.JsonObject;
 import net.minecraft.server.MinecraftServer;
 import world.agentlink.dispatch.Tool;
 import world.agentlink.dispatch.ToolException;
+import world.agentlink.i18n.AgentLinkLang;
 import world.agentlink.spark.SparkBridge;
 import world.agentlink.transport.ClientSession;
 
@@ -23,7 +24,7 @@ public class SparkStatsTool implements Tool {
     public JsonObject invoke(JsonObject args, ClientSession session) throws ToolException {
         if (!SparkBridge.apiAvailable()) {
             throw new ToolException("SPARK_UNAVAILABLE",
-                    "spark API not loaded — install spark and ensure it initialized at server start");
+                    AgentLinkLang.tr("agentlink.spark.error.api_unavailable"));
         }
         return SparkBridge.statsSnapshot();
     }

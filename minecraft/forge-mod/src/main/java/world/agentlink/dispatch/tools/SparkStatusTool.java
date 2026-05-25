@@ -3,6 +3,7 @@ package world.agentlink.dispatch.tools;
 import com.google.gson.JsonObject;
 import net.minecraft.server.MinecraftServer;
 import world.agentlink.dispatch.Tool;
+import world.agentlink.i18n.AgentLinkLang;
 import world.agentlink.spark.SparkBridge;
 import world.agentlink.transport.ClientSession;
 
@@ -37,11 +38,11 @@ public class SparkStatusTool implements Tool {
         if (cmdAvailable) {
             // Probe profiler info — surfaces "not running" or current sample state.
             SparkBridge.CommandResult info = SparkBridge.runSpark(mc, "profiler info", 0);
-            r.addProperty("profiler_info", info.output());
+            r.addProperty("profiler_info", SparkBridge.localizeOutput(info.output()));
         }
 
         if (!cmdAvailable && !apiAvailable) {
-            r.addProperty("hint", "Install the spark mod (https://spark.lucko.me) for advanced profiling. Without spark, fall back on tick_profile and thread_dump.");
+            r.addProperty("hint", AgentLinkLang.tr("agentlink.spark.hint.install"));
         }
 
         return r;

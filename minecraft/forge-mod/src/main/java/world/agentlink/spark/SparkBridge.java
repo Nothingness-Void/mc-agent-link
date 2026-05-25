@@ -16,6 +16,7 @@ import org.apache.logging.log4j.core.appender.AbstractAppender;
 import org.apache.logging.log4j.core.config.Configuration;
 import org.apache.logging.log4j.core.config.LoggerConfig;
 import world.agentlink.AgentLinkMod;
+import world.agentlink.i18n.AgentLinkLang;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -164,6 +165,36 @@ public final class SparkBridge {
     public static String extractUrl(String text) {
         Matcher m = URL_PATTERN.matcher(text);
         return m.find() ? m.group() : null;
+    }
+
+    public static String localizeOutput(String output) {
+        if (output == null || output.isEmpty()) return output;
+        String[] lines = output.split("\n", -1);
+        for (int i = 0; i < lines.length; i++) {
+            lines[i] = localizeLine(lines[i]);
+        }
+        return String.join("\n", lines);
+    }
+
+    private static String localizeLine(String line) {
+        if (line == null || line.isEmpty()) return line;
+        if (URL_PATTERN.matcher(line).find()) return line;
+        String s = line;
+        s = s.replace("Starting the profiler...", AgentLinkLang.tr("agentlink.spark.output.starting_profiler"));
+        s = s.replace("Profiler has started", AgentLinkLang.tr("agentlink.spark.output.profiler_started"));
+        s = s.replace("The profiler is already running", AgentLinkLang.tr("agentlink.spark.output.profiler_already_running"));
+        s = s.replace("Stopping the profiler & uploading results, please wait...", AgentLinkLang.tr("agentlink.spark.output.stopping_profiler"));
+        s = s.replace("Profiler stopped & upload complete!", AgentLinkLang.tr("agentlink.spark.output.profiler_stopped_uploaded"));
+        s = s.replace("Restarted the background profiler. (If you don't want this to happen, run /spark profiler cancel)", AgentLinkLang.tr("agentlink.spark.output.background_profiler_restarted"));
+        s = s.replace("Profiler has been cancelled.", AgentLinkLang.tr("agentlink.spark.output.profiler_cancelled"));
+        s = s.replace("The profiler is not running", AgentLinkLang.tr("agentlink.spark.output.profiler_not_running"));
+        s = s.replace("Generating server health report...", AgentLinkLang.tr("agentlink.spark.output.generating_health_report"));
+        s = s.replace("Health report generated & uploaded!", AgentLinkLang.tr("agentlink.spark.output.health_report_uploaded"));
+        s = s.replace("Health report generated!", AgentLinkLang.tr("agentlink.spark.output.health_report_generated"));
+        s = s.replace("Upload complete!", AgentLinkLang.tr("agentlink.spark.output.upload_complete"));
+        s = s.replace("View it here:", AgentLinkLang.tr("agentlink.spark.output.view_here"));
+        s = s.replace("View at:", AgentLinkLang.tr("agentlink.spark.output.view_at"));
+        return s;
     }
 
     // ---- log4j tap ---------------------------------------------------------
