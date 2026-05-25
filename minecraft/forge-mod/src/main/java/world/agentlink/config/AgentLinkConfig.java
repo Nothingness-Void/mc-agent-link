@@ -53,6 +53,10 @@ public final class AgentLinkConfig {
             "get_block", "get_blocks_region", "get_biome",
             "raycast", "list_entities_near",
             "list_dimensions", "list_block_ids", "list_item_ids", "list_entity_ids", "list_biome_ids",
+            // Tier-A read-only tools.
+            "command", "find_players", "get_item_info", "get_recipes_for", "get_block_drops",
+            // Tier-C read-only / read-config / snapshot.
+            "read_config", "save_block_snapshot", "get_scoreboard",
             // Diagnostics / logs / events.
             "get_recent_events", "get_recent_logs", "subscribe_events", "unsubscribe_events",
             "tick_profile", "thread_dump",
@@ -65,7 +69,9 @@ public final class AgentLinkConfig {
             // Performance-impacting profiler control.
             "spark_profiler_start", "spark_profiler_stop", "spark_profiler_cancel",
             // Sensitive filesystem access (can read agent-link.toml token, ops.json, world data).
-            "read_server_file", "list_dir"
+            "read_server_file", "list_dir",
+            // Container peek bypasses the open animation; treat as snooping and require admin.
+            "get_container"
     );
     private static volatile Snapshot CURRENT;
 
@@ -178,7 +184,7 @@ public final class AgentLinkConfig {
                     java.util.Collections.unmodifiableList(approvalAdminOnlyTools),
                     java.util.Collections.unmodifiableList(roleAdminUuids),
                     java.util.Collections.unmodifiableList(roleGuestUuids),
-                    "0.2.3-alpha");
+                    "0.2.4-alpha");
 
             if (fresh) {
                 AgentLinkMod.LOG.info("agent-link wrote default config to {}", path);

@@ -1,6 +1,6 @@
 # MCP Tools reference
 
-This page lists every MCP tool registered by `mc-agent-link` (base mod) at startup and what each one does. Versions covered: **0.2.3-alpha** (base) + **0.3.2-alpha** (`mc-agent-link-agent` addon).
+This page lists every MCP tool registered by `mc-agent-link` (base mod) at startup and what each one does. Versions covered: **0.2.4-alpha** (base) + **0.3.4-alpha** (`mc-agent-link-agent` addon).
 
 > Tools that an addon adds via `AgentLinkApi.registerTool(modId, tool)` get a `<modid>__` prefix and appear in MCP `tools/list` automatically; this page only documents the base mod set.
 
@@ -81,10 +81,29 @@ A non-OP player cannot approve anything. The `/agentlink` command tree itself re
 | Tool | Tier | Args | Notes |
 |---|---|---|---|
 | `run_console_command` | 4 | `{ command }` | full op-level-4 console; `command` accepts `say *`/`tellraw *`/etc. and the `[始终允许 run_console_command(command=say *)]` button records a parameter-glob trust rule |
-| `broadcast` | 4 | `{ message, color? }` | system message to every online player |
+| `broadcast` | 4 | `{ message?, components?, color?, target? }` | system message; provide either `message` (+ optional `color`) or `components` (raw tellraw JSON). `target` accepts `@a` (default), a player name, or UUID |
 | `write_config_file` | 4 | `{ path, content, base64? }` | sandboxed by `write_allow` / `write_deny` globs in `agent-link.toml` |
 | `read_server_file` | 4 | `{ path, offset?, max_bytes? }` | reads under server root; can leak secrets so admin-only by default |
 | `list_dir` | 4 | `{ path }` | same scope as `read_server_file` |
+| `get_container` | 4 | `{ x, y, z, dim? }` | reads container contents without opening the block; writes one audit-log line |
+
+## Tier-A read-only catalog & dry-run (auto-allowed)
+
+| Tool | Args | Returns |
+|---|---|---|
+| `command` | `{ command, mode?, cursor? }` | Brigadier dry-run. `mode="suggest"` returns Tab suggestions at `cursor`; `mode="parse"` (default) returns syntax errors and any unused trailing input. |
+| `find_players` | `{ selector, include_entities?, anchor?, anchor_player? }` | resolves vanilla `@a/@e/@p/@r` selectors. Optional anchor sets the source for relative selectors (`distance=..16`). |
+| `get_item_info` | `{ id }` | static catalog: stack size, durability, fuel time, edibility, fire resistance, tags; default-state block info if id is a block. |
+| `get_recipes_for` | `{ id }` | every recipe whose result is `id` (crafting / smelting / blasting / smoking / campfire / stonecutting / smithing). |
+| `get_block_drops` | `{ x, y, z, dim?, tool?, fortune?, silk_touch?, rolls? }` | one-or-many randomized loot rolls. Returns total + average per break per drop id. |
+
+## Tier-C config & snapshot (auto-allowed read; mutating snapshot is separate)
+
+| Tool | Args | Returns |
+|---|---|---|
+| `read_config` | `{ name?, mode? }` | reads one of an allowlisted config name (`server.properties`, `agent-link.toml`, `whitelist.json`, `ops.json`, ...). `mode="list"` returns the allowed names. |
+| `save_block_snapshot` | `{ name, min, max, dim? }` (volume ≤ 65536) | saves palette+RLE to `config/agent-link/snapshots/<name>.json`. No restore yet. |
+| `get_scoreboard` | `{ mode? = "objectives" / "objective" / "teams", name? }` | objectives summary, full per-player scores for one objective, or team list with members. |
 
 ---
 

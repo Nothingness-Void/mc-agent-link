@@ -178,17 +178,133 @@
   },
   {
     "name": "broadcast",
-    "description": "Send a system message to every online player.",
+    "description": "Send a system message to all online players or one specific player. Provide either `message` (plain text + optional `color`) or `components` (raw tellraw JSON, object or array). `target` accepts \"@a\", a player name, or a UUID; defaults to @a.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "message": { "type": "string" },
-        "color": {
-          "type": "string",
-          "description": "Optional Minecraft chat color: red, yellow, gold, green, aqua, ..."
-        }
+        "components": { "description": "tellraw component(s) — object or array" },
+        "color": { "type": "string", "description": "Optional Minecraft chat color: red, yellow, gold, green, aqua, ..." },
+        "target": { "type": "string", "description": "@a, player name, or UUID" }
       },
-      "required": ["message"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "command",
+    "description": "Brigadier-backed dry-run for the server command tree. mode=\"suggest\" returns Tab-style suggestions at `cursor`; mode=\"parse\" reports syntax errors and unused trailing input. Source runs at op level 4 — nothing is executed.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "mode": { "type": "string", "enum": ["suggest", "parse"] },
+        "command": { "type": "string" },
+        "cursor": { "type": "integer" }
+      },
+      "required": ["command"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "find_players",
+    "description": "Resolve a vanilla entity selector (@a / @e / @p / @r / etc.). Optional `anchor`:{x,y,z,dim?} or `anchor_player`:name positions the source for relative selectors like distance=..16.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "selector": { "type": "string" },
+        "include_entities": { "type": "boolean" },
+        "anchor": { "type": "object", "properties": { "x": {"type":"number"}, "y": {"type":"number"}, "z": {"type":"number"}, "dim": {"type":"string"} } },
+        "anchor_player": { "type": "string" }
+      },
+      "required": ["selector"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "get_item_info",
+    "description": "Static catalog info for one item or block id: stack size, durability, fuel time, edibility, fire resistance, tags, default block state.",
+    "inputSchema": {
+      "type": "object",
+      "properties": { "id": { "type": "string" } },
+      "required": ["id"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "get_recipes_for",
+    "description": "Recipes whose result is the given item id. Covers crafting (shaped/shapeless), smelting/blasting/smoking/campfire, stonecutting, smithing.",
+    "inputSchema": {
+      "type": "object",
+      "properties": { "id": { "type": "string" } },
+      "required": ["id"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "get_block_drops",
+    "description": "Compute loot-table drops for a block under a given tool / fortune / silk_touch. One randomized roll by default; set `rolls` (1-1000) to average over multiple rolls.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "x": { "type": "integer" }, "y": { "type": "integer" }, "z": { "type": "integer" },
+        "dim": { "type": "string" },
+        "tool": { "type": "string", "description": "item id, e.g. minecraft:diamond_pickaxe" },
+        "fortune": { "type": "integer" },
+        "silk_touch": { "type": "boolean" },
+        "rolls": { "type": "integer" }
+      },
+      "required": ["x", "y", "z"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "get_container",
+    "description": "Read the contents of a container block (chest, hopper, furnace, dispenser, shulker, barrel...) without opening it. Admin-only by default; writes a one-line audit log entry.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "x": { "type": "integer" }, "y": { "type": "integer" }, "z": { "type": "integer" },
+        "dim": { "type": "string" }
+      },
+      "required": ["x", "y", "z"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "read_config",
+    "description": "Read a known config file by short name. mode=\"list\" returns the allowlisted names. Built-in entries: server.properties, agent-link.toml, agent-link-agent.toml, whitelist.json, ops.json, banned-players.json, banned-ips.json, forge-common.toml, forge-server.toml.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "mode": { "type": "string", "enum": ["read", "list"] },
+        "name": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "save_block_snapshot",
+    "description": "Save a region (volume <= 65536) to config/agent-link/snapshots/<name>.json (palette + RLE). Read-only side of the snapshot/restore pair; restore is not yet implemented.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "[A-Za-z0-9._-]{1,64}" },
+        "min": { "type": "object", "properties": { "x":{"type":"integer"}, "y":{"type":"integer"}, "z":{"type":"integer"} }, "required": ["x","y","z"] },
+        "max": { "type": "object", "properties": { "x":{"type":"integer"}, "y":{"type":"integer"}, "z":{"type":"integer"} }, "required": ["x","y","z"] },
+        "dim": { "type": "string" }
+      },
+      "required": ["name", "min", "max"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "get_scoreboard",
+    "description": "Read scoreboard objectives or teams. mode=\"objectives\" lists all objectives; mode=\"objective\" returns full per-player scores for one (`name` required); mode=\"teams\" lists teams and members.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "mode": { "type": "string", "enum": ["objectives", "objective", "teams"] },
+        "name": { "type": "string" }
+      },
       "additionalProperties": false
     }
   },

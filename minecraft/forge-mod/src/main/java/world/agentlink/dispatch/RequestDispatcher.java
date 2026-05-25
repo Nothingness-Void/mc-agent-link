@@ -8,16 +8,25 @@ import world.agentlink.AgentLinkMod;
 import world.agentlink.approval.AgentToolApproval;
 import world.agentlink.dispatch.tools.AgentHeartbeatTool;
 import world.agentlink.dispatch.tools.BroadcastTool;
+import world.agentlink.dispatch.tools.CommandTool;
+import world.agentlink.dispatch.tools.FindPlayersTool;
 import world.agentlink.dispatch.tools.GetBiomeTool;
 import world.agentlink.dispatch.tools.GetBlockTool;
 import world.agentlink.dispatch.tools.GetBlocksRegionTool;
+import world.agentlink.dispatch.tools.GetContainerTool;
+import world.agentlink.dispatch.tools.GetItemInfoTool;
 import world.agentlink.dispatch.tools.GetPlayerInfoTool;
 import world.agentlink.dispatch.tools.GetPlayerInventoryTool;
 import world.agentlink.dispatch.tools.GetAgentRequestsTool;
+import world.agentlink.dispatch.tools.GetBlockDropsTool;
 import world.agentlink.dispatch.tools.GetRecentEventsTool;
 import world.agentlink.dispatch.tools.GetRecentLogsTool;
+import world.agentlink.dispatch.tools.GetRecipesForTool;
+import world.agentlink.dispatch.tools.GetScoreboardTool;
 import world.agentlink.dispatch.tools.GetServerStatsTool;
 import world.agentlink.dispatch.tools.GetWorldInfoTool;
+import world.agentlink.dispatch.tools.ReadConfigTool;
+import world.agentlink.dispatch.tools.SaveBlockSnapshotTool;
 import world.agentlink.dispatch.tools.ListDimensionsTool;
 import world.agentlink.dispatch.tools.ListDirTool;
 import world.agentlink.dispatch.tools.ListEntitiesNearTool;
@@ -107,6 +116,19 @@ public class RequestDispatcher {
         registerBuiltin(new RegistryListTool(RegistryListTool.Kind.ITEM));
         registerBuiltin(new RegistryListTool(RegistryListTool.Kind.ENTITY));
         registerBuiltin(new RegistryListTool(RegistryListTool.Kind.BIOME));
+
+        // Tier-A tools (added in 0.2.4)
+        registerBuiltin(new CommandTool(mc));
+        registerBuiltin(new FindPlayersTool(mc));
+        registerBuiltin(new GetItemInfoTool());
+        registerBuiltin(new GetRecipesForTool(mc));
+        registerBuiltin(new GetBlockDropsTool(mc));
+
+        // Tier-C tools (added in 0.2.4)
+        registerBuiltin(new GetContainerTool(mc));
+        registerBuiltin(new ReadConfigTool(mc));
+        registerBuiltin(new SaveBlockSnapshotTool(mc));
+        registerBuiltin(new GetScoreboardTool(mc));
 
         synchronized (PRE_REGISTERED_LOCK) {
             for (RegisteredEntry entry : PRE_REGISTERED) {
