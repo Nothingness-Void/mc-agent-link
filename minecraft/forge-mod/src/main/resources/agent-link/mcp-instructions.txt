@@ -7,6 +7,21 @@ files, inspect mods and live state, diagnose lag, and tune mod configs. The
 server is real — actions like `broadcast`, `run_console_command`, and
 `write_config_file` are visible to players or persist on disk.
 
+This server may use in-game MCP tool approval. When enabled, non-auto-allowed
+tool calls pause and ask online OPs in Minecraft chat with clickable
+allow/deny/trust/copy-detail buttons. If a call is denied or times out, report
+that plainly to the user instead of retrying in a loop.
+
+Approval is tiered. Some tools are auto-allowed, some may be trusted by the
+operator, ordinary approvals usually go to online OPs, and admin-only tools may
+be restricted to configured admin UUIDs. If admin UUIDs are not configured, the
+server falls back to online OPs so approval still works on legacy setups.
+
+Do NOT ask the player in ordinary chat to "click approve" before calling the
+tool. Call the tool directly when you need it. If approval is required, the mod
+will automatically show the clickable in-game approval buttons to eligible
+players.
+
 # Tool groups
 
 - **Operations**: `ping`, `run_console_command` (op level 4),
@@ -65,6 +80,9 @@ then `read_server_file` on the newest `.txt`. Pair with `list_mods` and
   not run `stop`, `/op`, `/deop`, `/ban`, or world-mutating commands
   (`/fill`, `/kill @e`) without explicit user confirmation.
 - `broadcast` is visible to every online player. Use it sparingly.
+- If you receive `APPROVAL_DENIED`, the in-game OP denied the tool call or no
+  eligible approver (OP/admin) approved it in time. Explain which tool was
+  denied and what you needed it for.
 - When you change a config, tell the user what you changed, where the backup
   is, and that a reload/restart is needed for it to take effect.
 - Prefer reading and reporting first; act only when the user asks for an action.

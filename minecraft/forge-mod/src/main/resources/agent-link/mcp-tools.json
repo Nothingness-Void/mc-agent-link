@@ -21,11 +21,158 @@
   },
   {
     "name": "get_player_info",
-    "description": "Detailed info for one online player: position, dimension, health, food, gamemode, ping.",
+    "description": "Detailed info for one online player: precise + block-aligned position, dimension, yaw/pitch, facing cardinal, look_vector, look_target (5-block raycast), held items, status effects, vitals, xp, gamemode, ping.",
     "inputSchema": {
       "type": "object",
       "properties": { "name": { "type": "string" } },
       "required": ["name"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "get_player_inventory",
+    "description": "Snapshot of one online player's inventory: hotbar+main, armor (slots 36-39), offhand (40). Returns id, count, damage, optional custom_name and has_nbt flag per non-empty slot.",
+    "inputSchema": {
+      "type": "object",
+      "properties": { "name": { "type": "string" } },
+      "required": ["name"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "get_world_info",
+    "description": "Snapshot of time/weather/world settings: game time, day, moon phase, rain/thunder, difficulty, hardcore, default gametype, level name, seed, overworld spawn, world border, gamerules, and per-dimension summary.",
+    "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+  },
+  {
+    "name": "get_block",
+    "description": "Read a single block at (x,y,z). Returns id, blockstate properties, light emission, biome at column, and block-entity type if present.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "x": { "type": "integer" },
+        "y": { "type": "integer" },
+        "z": { "type": "integer" },
+        "dim": { "type": "string", "description": "Dimension id, default minecraft:overworld" }
+      },
+      "required": ["x", "y", "z"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "get_blocks_region",
+    "description": "Read a cuboid (volume <= 4096 blocks). Returns palette + run-length runs in y-z-x order. Bigger regions must be split into chunks.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "min": { "type": "object", "properties": { "x": {"type": "integer"}, "y": {"type": "integer"}, "z": {"type": "integer"} }, "required": ["x","y","z"] },
+        "max": { "type": "object", "properties": { "x": {"type": "integer"}, "y": {"type": "integer"}, "z": {"type": "integer"} }, "required": ["x","y","z"] },
+        "dim": { "type": "string" }
+      },
+      "required": ["min", "max"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "get_biome",
+    "description": "Biome at (x,y,z) plus base/local temperature, downfall, has_precipitation.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "x": { "type": "integer" }, "y": { "type": "integer" }, "z": { "type": "integer" },
+        "dim": { "type": "string" }
+      },
+      "required": ["x", "y", "z"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "raycast",
+    "description": "Generic block raycast. Caller picks origin and direction; returns hit block, face, distance, and hit-point (or hit=false). max_distance capped at 64.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "origin": { "type": "object", "properties": { "x":{"type":"number"}, "y":{"type":"number"}, "z":{"type":"number"} }, "required":["x","y","z"] },
+        "direction": { "type": "object", "properties": { "x":{"type":"number"}, "y":{"type":"number"}, "z":{"type":"number"} }, "required":["x","y","z"] },
+        "max_distance": { "type": "number" },
+        "hit_fluids": { "type": "boolean" },
+        "dim": { "type": "string" }
+      },
+      "required": ["origin", "direction"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "list_entities_near",
+    "description": "List entities within radius (<=64) of a center point. Returns up to 256 hits with uuid, type, category (player/mob/item/projectile/xp_orb/other), position, distance, vitals, vehicle relations. Optional filters: types[], ids[].",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "center": { "type": "object", "properties": { "x":{"type":"number"}, "y":{"type":"number"}, "z":{"type":"number"} }, "required":["x","y","z"] },
+        "radius": { "type": "number" },
+        "limit": { "type": "integer" },
+        "types": { "type": "array", "items": { "type": "string" } },
+        "ids": { "type": "array", "items": { "type": "string" } },
+        "dim": { "type": "string" }
+      },
+      "required": ["center"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "list_dimensions",
+    "description": "List loaded dimensions: id, min_y, height, sea_level, loaded_chunks.",
+    "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+  },
+  {
+    "name": "list_block_ids",
+    "description": "Paginated registry list. Optional filter is a substring of the resource id (e.g. \"wool\"). Default page_size 100, max 500.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "filter": { "type": "string" },
+        "page": { "type": "integer" },
+        "page_size": { "type": "integer" }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "list_item_ids",
+    "description": "Paginated registry list of items. Same args as list_block_ids.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "filter": { "type": "string" },
+        "page": { "type": "integer" },
+        "page_size": { "type": "integer" }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "list_entity_ids",
+    "description": "Paginated registry list of entity types.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "filter": { "type": "string" },
+        "page": { "type": "integer" },
+        "page_size": { "type": "integer" }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "list_biome_ids",
+    "description": "List vanilla biome ids (datapack-added biomes are not included).",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "filter": { "type": "string" },
+        "page": { "type": "integer" },
+        "page_size": { "type": "integer" }
+      },
       "additionalProperties": false
     }
   },
