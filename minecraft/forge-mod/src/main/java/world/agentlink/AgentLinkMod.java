@@ -10,6 +10,7 @@ import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.event.lifecycle.FMLCommonSetupEvent;
 import org.slf4j.Logger;
 import world.agentlink.agent.AgentLinkCommand;
+import world.agentlink.approval.AgentToolApproval;
 import world.agentlink.config.AgentLinkConfig;
 import world.agentlink.transport.AgentLinkServer;
 import world.agentlink.transport.mcp.McpHttpServer;
@@ -36,6 +37,7 @@ public class AgentLinkMod {
     @SubscribeEvent
     public void onServerStarted(ServerStartedEvent event) {
         var cfg = AgentLinkConfig.get();
+        AgentToolApproval.start(event.getServer(), cfg);
         server = new AgentLinkServer(event.getServer(), cfg);
         try {
             server.start();
@@ -67,6 +69,7 @@ public class AgentLinkMod {
 
     @SubscribeEvent
     public void onServerStopping(ServerStoppingEvent event) {
+        AgentToolApproval.stopCurrent();
         if (mcpServer != null) {
             try {
                 mcpServer.stop();
@@ -76,6 +79,7 @@ public class AgentLinkMod {
         }
         if (server != null) {
             try {
+                world.agentlink.dispatch.RequestDispatcher.clearCurrent(server.dispatcher());
                 server.shutdown();
             } catch (Exception e) {
                 LOG.warn("agent-link shutdown error", e);
