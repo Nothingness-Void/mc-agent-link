@@ -8,6 +8,7 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.GameRules;
 import net.minecraft.world.level.border.WorldBorder;
 import world.agentlink.dispatch.Tool;
+import world.agentlink.dispatch.ToolException;
 import world.agentlink.transport.ClientSession;
 
 /**
@@ -29,43 +30,46 @@ public class GetWorldInfoTool implements Tool {
     }
 
     @Override
-    public JsonObject invoke(JsonObject args, ClientSession session) {
+    public JsonObject invoke(JsonObject args, ClientSession session) throws ToolException {
+        ServerLevel target = args.has("dim") && !args.get("dim").isJsonNull()
+                ? GetBlockTool.resolveDimension(mc, args)
+                : mc.overworld();
         JsonObject r = new JsonObject();
 
-        ServerLevel overworld = mc.overworld();
-        long dayTime = overworld.getDayTime();
-        long gameTime = overworld.getGameTime();
+        long dayTime = target.getDayTime();
+        long gameTime = target.getGameTime();
         long timeOfDay = ((dayTime % 24000) + 24000) % 24000;
         long day = dayTime / 24000;
 
+        r.addProperty("dim", target.dimension().location().toString());
         r.addProperty("server_running_ms", System.currentTimeMillis());
         r.addProperty("game_time_ticks", gameTime);
         r.addProperty("day_time_ticks", dayTime);
         r.addProperty("time_of_day_ticks", timeOfDay);
         r.addProperty("day", day);
-        r.addProperty("moon_phase", overworld.getMoonPhase());
-        r.addProperty("is_day", overworld.isDay());
-        r.addProperty("is_night", overworld.isNight());
-        r.addProperty("is_raining", overworld.isRaining());
-        r.addProperty("is_thundering", overworld.isThundering());
-        r.addProperty("rain_level", overworld.getRainLevel(1.0F));
-        r.addProperty("thunder_level", overworld.getThunderLevel(1.0F));
+        r.addProperty("moon_phase", target.getMoonPhase());
+        r.addProperty("is_day", target.isDay());
+        r.addProperty("is_night", target.isNight());
+        r.addProperty("is_raining", target.isRaining());
+        r.addProperty("is_thundering", target.isThundering());
+        r.addProperty("rain_level", target.getRainLevel(1.0F));
+        r.addProperty("thunder_level", target.getThunderLevel(1.0F));
 
         r.addProperty("difficulty", mc.getWorldData().getDifficulty().getKey());
         r.addProperty("hardcore", mc.getWorldData().isHardcore());
         r.addProperty("default_gametype", mc.getDefaultGameType().getName());
         r.addProperty("level_name", mc.getWorldData().getLevelName());
-        r.addProperty("seed", overworld.getSeed());
+        r.addProperty("seed", target.getSeed());
 
-        BlockPos spawn = overworld.getSharedSpawnPos();
+        BlockPos spawn = target.getSharedSpawnPos();
         JsonObject spawnObj = new JsonObject();
         spawnObj.addProperty("x", spawn.getX());
         spawnObj.addProperty("y", spawn.getY());
         spawnObj.addProperty("z", spawn.getZ());
-        spawnObj.addProperty("angle", overworld.getSharedSpawnAngle());
-        r.add("overworld_spawn", spawnObj);
+        spawnObj.addProperty("angle", target.getSharedSpawnAngle());
+        r.add("spawn", spawnObj);
 
-        WorldBorder border = overworld.getWorldBorder();
+        WorldBorder border = target.getWorldBorder();
         JsonObject borderObj = new JsonObject();
         borderObj.addProperty("center_x", border.getCenterX());
         borderObj.addProperty("center_z", border.getCenterZ());
@@ -74,11 +78,12 @@ public class GetWorldInfoTool implements Tool {
         borderObj.addProperty("safe_zone", border.getDamageSafeZone());
         borderObj.addProperty("warning_blocks", border.getWarningBlocks());
         borderObj.addProperty("warning_time_seconds", border.getWarningTime());
-        r.add("overworld_border", borderObj);
+        r.add("border", borderObj);
 
-        // GameRules — flatten to {name: value-as-string}
+        // GameRules — flatten to {name: value-as-string}. Gamerules are server-wide so the
+        // overworld instance is fine even when caller asked for another dimension.
         JsonObject rulesObj = new JsonObject();
-        GameRules rules = overworld.getGameRules();
+        GameRules rules = mc.overworld().getGameRules();
         GameRules.visitGameRuleTypes(new GameRules.GameRuleTypeVisitor() {
             @Override
             public <T extends GameRules.Value<T>> void visit(GameRules.Key<T> key, GameRules.Type<T> type) {
@@ -88,7 +93,8 @@ public class GetWorldInfoTool implements Tool {
         });
         r.add("gamerules", rulesObj);
 
-        // Per-dimension summary
+        // Per-dimension summary (always full list so the agent doesn't have to call list_dimensions
+        // for the common "snapshot the server" case).
         JsonArray dims = new JsonArray();
         for (ServerLevel level : mc.getAllLevels()) {
             JsonObject d = new JsonObject();
