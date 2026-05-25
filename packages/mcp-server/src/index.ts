@@ -599,7 +599,7 @@ to the player with \`reply_agent_request\`.
 `.trim();
 
 const server = new Server(
-  { name: "agent-link", version: "0.1.6-alpha" },
+  { name: "agent-link", version: "0.2.3-alpha" },
   { capabilities: { tools: {} }, instructions: INSTRUCTIONS },
 );
 
