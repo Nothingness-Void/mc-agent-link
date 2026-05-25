@@ -253,7 +253,7 @@ The pair code is consumed after one successful exchange. Failure returns HTTP `4
 | method | params | result |
 |---|---|---|
 | `initialize` | `{protocolVersion, capabilities, clientInfo}` | `{protocolVersion, capabilities: {tools: {}}, serverInfo: {name: "agent-link", version}, instructions}` |
-| `tools/list` | `{}` | `{tools: [{name, description, inputSchema}, ...]}` (20 tools) |
+| `tools/list` | `{}` | `{tools: [{name, description, inputSchema}, ...]}` (all built-in tools plus any addon tools registered through `world.agentlink.api.AgentLinkApi`) |
 | `tools/call` | `{name, arguments}` | `{content: [{type: "text", text: "<JSON tool result>"}], isError: false}` |
 | `notifications/initialized` | (notification) | (acknowledged with `202 Accepted`) |
 
@@ -276,6 +276,38 @@ The HTTP transport shares the dispatcher and tool registry with the WebSocket tr
 
 The two stateful tools `subscribe_events` / `unsubscribe_events` are not useful over HTTP (no persistent session); use `get_recent_events` instead.
 
+## Addon tool registration
+
+Optional addon mods can register tools through the stable Java API:
+
+- `world.agentlink.api.AgentLinkApi.registerTool(modId, tool)`
+- `world.agentlink.api.BaseAddonTool`
+
+Registered tools are automatically exposed as `<modid>__<tool_name>` to avoid clashes with built-ins or other addons. Over HTTP MCP, these tools are appended to `tools/list` with their `description` and `inputSchema`.
+
+## In-game MCP tool approval
+
+When `approval.enabled = true` in `config/agent-link.toml`, MCP tool calls are gated in 4 tiers:
+
+1. `approval.auto_allow_tools` → allowed immediately
+2. `approval.trusted_tools` → allowed immediately once trusted in-game
+3. ordinary approval → shown to online OPs in Minecraft chat
+4. `approval.admin_only_tools` → shown only to players listed in `[roles].admin_uuids`
+
+If `[roles].admin_uuids` is empty, tier 4 falls back to all online OPs so legacy servers still have someone who can approve.
+
+The OP sees clickable buttons:
+
+```text
+[允许一次] [拒绝] [始终允许该工具] [复制详情]
+```
+
+`[始终允许该工具]` persists the tool name to `approval.trusted_tools`. High-impact tools such as `run_console_command`, `write_config_file`, `broadcast`, and spark profiler control are never permanently trustable and require per-call approval.
+
+The clickable commands `/agentlink approve|deny|trust <id>` use the same authorization rules as button visibility: non-admin OPs cannot manually approve an `admin_only_tools` request when `admin_uuids` is configured.
+
+If no eligible approver is online, an approver denies the request, or `approval.timeout_seconds` elapses, the tool returns `APPROVAL_DENIED`.
+
 ## Error codes
 
 | code | meaning |
@@ -285,6 +317,7 @@ The two stateful tools `subscribe_events` / `unsubscribe_events` are not useful 
 | `UNSUPPORTED_VERSION` | `v` mismatch |
 | `UNKNOWN_TOOL` | tool not implemented on this loader |
 | `INVALID_ARGS` | argument validation failed |
+| `APPROVAL_DENIED` | in-game MCP tool approval was denied, timed out, or no eligible approver (OP/admin) was online |
 | `INTERNAL_ERROR` | unexpected exception (server logs the trace) |
 | `TIMEOUT` | tool exceeded its server-side budget |
 | `SPARK_UNAVAILABLE` | a `spark_*` tool was called but the spark mod is not installed |

@@ -18,14 +18,18 @@ Claude Code、Cursor、自定义 agent 都说 MCP,但 Minecraft 服务器不说�
 
 | 类别 | 工具 | 用途 |
 |---|---|---|
-| 操作 | `ping` `run_console_command` `list_online_players` `get_player_info` `broadcast` `get_server_stats` | 跑控制台命令、查在线玩家、广播消息 |
+| 操作 | `ping` `run_console_command` `broadcast` | 跑控制台命令、广播消息 |
+| 玩家 | `list_online_players` `get_player_info` `get_player_inventory` | 在线列表、详细位姿/朝向/look_target/状态效果、完整背包 |
+| 世界 | `get_world_info` `get_block` `get_blocks_region` `get_biome` `raycast` `list_entities_near` `list_dimensions` | 时间/天气/seed、单点方块、区域 RLE 读取(≤4096)、群系、自由射线、附近实体 |
+| 注册表 | `list_block_ids` `list_item_ids` `list_entity_ids` `list_biome_ids` | 分页 + 子串过滤 |
+| 性能 | `get_server_stats` `tick_profile` `thread_dump` `list_mods` | TPS/MSPT、tick 分布、JVM 线程 dump、已装 mod 列表 |
 | 游戏内请求 API | `agent_heartbeat` `get_agent_requests` `update_agent_request_status` `reply_agent_request` | 主 mod 提供请求队列和 MCP API;游戏内 `/agent` 命令由可选附属 mod `mc-agent-link-agent` 提供 |
 | 观察(pull) | `get_recent_events` `get_recent_logs` | 读最近的聊天/进出/死亡事件,以及完整服务器日志(含异常栈) |
-| 诊断 | `tick_profile` `thread_dump` `list_mods` | tick 分布、JVM 线程 dump、已装 mod 列表 |
 | 文件(沙盒) | `list_dir` `read_server_file` `write_config_file` | 服务端 root 下任意文件**只读**;`config/**` 才能写,且自动备份 |
 | Spark 集成(选装) | `spark_status` `spark_stats` `spark_profiler_start/stop/cancel` `spark_health_report` | 装了 [spark](https://spark.lucko.me) mod 之后,agent 能跑火焰图、拿 viewer URL、读 GC 细节 |
+| 稳定 addon API | `world.agentlink.api.AgentLinkApi` `BaseAddonTool` | 可选附属 mod 能注册自己的 MCP 工具,自动加上 `<modid>__` 前缀,并出现在 HTTP `tools/list` 里 |
 
-完整的协议字段、错误码、沙盒边界看 [docs/protocol.md](docs/protocol.md)。
+完整工具目录(含每个工具的入参/返回字段)见 [docs/tools.md](docs/tools.md)。协议字段、错误码、沙盒边界看 [docs/protocol.md](docs/protocol.md)。
 
 ## 架构
 
@@ -49,6 +53,8 @@ Claude Code、Cursor、自定义 agent 都说 MCP,但 Minecraft 服务器不说�
   - `:25580` —— 自家 WebSocket 协议,服务非 MCP 客户端(moderation bot、stdio bridge)
 - 所有触碰世界状态的活儿都派发到主线程,线程安全。
 - **多 agent**:HTTP + WebSocket 各自接受多个并发连接。
+- **游戏内审批**:MCP 工具调用可在游戏聊天里弹出 `[允许一次] [拒绝] [始终允许该工具] [复制详情]` 按钮,OP 点击即可审批,不需要手打命令。
+- **可扩展**:附属 mod 可以通过 `world.agentlink.api.AgentLinkApi.registerTool(...)` 注册自定义工具;工具名会自动命名空间化成 `<modid>__<tool>`。
 
 ## 仓库结构
 
@@ -97,7 +103,17 @@ https://github.com/Nothingness-Void/mc-agent-link/blob/main/AGENTS.md#agent-link
 | `/mc-diagnose` | 卡顿诊断闭环:tick_profile → thread_dump → 可选 spark → mod 定位 → 改 config |
 | `/mc-crash` | 读最新 crash-reports/*.txt,关联 mods + 错误日志,给修复建议 |
 
-非 Claude Code 的 agent 也能直接读 `.claude/skills/<name>/SKILL.md` 当 prompt 模板。
+ 非 Claude Code 的 agent 也能直接读 `.claude/skills/<name>/SKILL.md` 当 prompt 模板。
+
+## 附属 mod / addon API
+
+- **稳定入口**:`world.agentlink.api.AgentLinkApi`
+- **注册工具**:`AgentLinkApi.registerTool(modId, tool)`
+- **便捷基类**:`world.agentlink.api.BaseAddonTool`
+- **命名规则**:注册后会自动变成 `<modid>__<tool_name>`，避免和内置工具或别的 addon 冲突
+- **发现方式**:HTTP MCP `tools/list` 会把这些 addon 工具和内置工具一起返回
+
+这让 base mod 保持通用 MCP / 审批 / 请求队列能力,Claude bridge、avatar、自定义工具都能放在可选 addon 里单独发版。
 
 ## 安全边界
 
@@ -106,13 +122,19 @@ https://github.com/Nothingness-Void/mc-agent-link/blob/main/AGENTS.md#agent-link
 - **读**:服务端 root 内任意文件,默认 256 KiB,硬上限 4 MiB,二进制回退 base64。
 - **绝不允许**:删除文件、运行 OS shell、改 token、`..` 逃逸。
 - **op 命令**:`run_console_command` 是 op level 4,内置 instructions 提示 agent 在 `stop` / `/op` / `/ban` 等命令前必须经过用户确认。
+- **游戏内工具审批**:默认启用,分 4 档。
+  - `approval.auto_allow_tools`：直接放行,不弹按钮
+  - `approval.trusted_tools`：通过 `[始终允许该工具]` / `[始终允许 tool(arg=glob)]` 按钮维护,支持参数级 glob,如 `run_console_command(command=say *)`
+  - 普通审批：默认发给所有在线 OP;只要有权限 2 就能点按钮,手打 `/agentlink approve|deny|trust|trustpattern|trustlist|untrust` 也受同一套校验
+  - `approval.admin_only_tools`：admin_uuids 配置后只有这些玩家能点按钮;空 admin_uuids 时回退到所有在线 OP,保持老服可用
+- **高风险工具**:`run_console_command`、`write_config_file`、`broadcast`、`spark_profiler_*` 不能被"始终允许整工具",但可以用参数级模式信任(例如只放行 `say *`)。
 - 默认绑定 `127.0.0.1`;`allow_remote = true` 才会监听 `0.0.0.0`,自己判断要不要加防火墙。
 
 ## 协议要点
 
 - 帧 = UTF-8 JSON,`v=0`,三类:`request` / `response`(按 `id` 关联,可乱序) / `event`(订阅后推送)。
 - **推荐 pull 模式**:`get_recent_events` 拉一段最近事件(LLM 只为请求过的事件付 token);`subscribe_events` 推送给非 MCP 客户端用。
-- 错误码:`UNAUTHENTICATED` `INVALID_TOKEN` `UNSUPPORTED_VERSION` `UNKNOWN_TOOL` `INVALID_ARGS` `INTERNAL_ERROR` `TIMEOUT` `SPARK_UNAVAILABLE`。
+- 错误码:`UNAUTHENTICATED` `INVALID_TOKEN` `UNSUPPORTED_VERSION` `UNKNOWN_TOOL` `INVALID_ARGS` `APPROVAL_DENIED` `INTERNAL_ERROR` `TIMEOUT` `SPARK_UNAVAILABLE`。
 
 ## 路线图
 

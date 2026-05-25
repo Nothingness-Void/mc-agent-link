@@ -22,6 +22,7 @@ Modern AI agents (Claude Code, Cursor, custom agents) speak MCP. Minecraft serve
 | Diagnosis | `tick_profile` `thread_dump` `list_mods` | Tick distribution, JVM thread dump, installed mods |
 | Filesystem (sandboxed) | `list_dir` `read_server_file` `write_config_file` | Read anywhere under server root; writes are limited to `config/**` with auto-backup |
 | Spark integration (optional) | `spark_status` `spark_stats` `spark_profiler_*` `spark_health_report` | When the [spark](https://spark.lucko.me) mod is installed, agents get flame graphs, GC details, and viewer URLs |
+| Stable addon API | `world.agentlink.api.AgentLinkApi` `BaseAddonTool` | Optional addon mods can register their own MCP tools, get an automatic `<modid>__` prefix, and appear in HTTP `tools/list` |
 
 Full wire-protocol fields, error codes, and sandbox boundaries: [docs/protocol.md](docs/protocol.md).
 
@@ -47,6 +48,8 @@ Full wire-protocol fields, error codes, and sandbox boundaries: [docs/protocol.m
   - `:25580` — agent-link WebSocket protocol for non-MCP clients (moderation bots, the stdio bridge).
 - All work is dispatched on the main server thread to stay thread-safe with world state.
 - **Multi-agent**: HTTP and WebSocket each accept many concurrent connections.
+- **In-game approval**: MCP tool calls can ask online OPs in Minecraft chat with clickable `[allow once] [deny] [always allow this tool] [copy details]` buttons.
+- **Extensible**: addon mods can register custom tools through `world.agentlink.api.AgentLinkApi.registerTool(...)`; names are automatically namespaced as `<modid>__<tool>`.
 
 ## Repo layout
 
@@ -97,6 +100,16 @@ The repo also ships four Claude Code skills (under `.claude/skills/`, committed 
 
 For agents without skill support, feed `.claude/skills/<name>/SKILL.md` directly as a prompt template.
 
+## Addon API
+
+- **Stable entry point**: `world.agentlink.api.AgentLinkApi`
+- **Register tools**: `AgentLinkApi.registerTool(modId, tool)`
+- **Convenience base class**: `world.agentlink.api.BaseAddonTool`
+- **Naming rule**: registered tools are automatically rewritten to `<modid>__<tool_name>` to avoid clashes with built-ins or other addons
+- **Discovery**: HTTP MCP `tools/list` returns addon tools together with built-in tools
+
+This keeps the base mod focused on generic MCP transport, approval, and request-queue behavior while Claude bridge, avatar, or custom features live in optional addons.
+
 ## Safety boundaries
 
 - **Writes** are gated by `write_allow` / `write_deny` glob lists in `config/agent-link.toml` (defaults: `write_allow = ["config/**"]`, `write_deny = []`). Edit the file and restart the server to widen or tighten what agents can write. `write_deny` takes precedence over `write_allow`. Full rules, glob syntax, and examples are in [docs/protocol.md](docs/protocol.md) under "Filesystem sandbox".
@@ -104,6 +117,12 @@ For agents without skill support, feed `.claude/skills/<name>/SKILL.md` directly
 - **Reads** can touch anywhere under server root, capped at 256 KiB by default and 4 MiB hard. Binary files come back base64.
 - **Never allowed**: deleting files, running OS shell, changing the token, escaping the root with `..`.
 - **Op commands**: `run_console_command` runs at op level 4. The bundled `instructions` tell agents to require explicit user confirmation before `stop`, `/op`, `/ban`, etc.
+- **In-game tool approval** is enabled by default and split into 4 tiers.
+  - `approval.auto_allow_tools`: allowed immediately without a prompt
+  - `approval.trusted_tools`: remembered from the `[always allow this tool]` button
+  - ordinary approval: shown to all online OPs; clickable buttons and manual `/agentlink approve|deny|trust` use the same authorization checks
+  - `approval.admin_only_tools`: only players listed in `[roles].admin_uuids` may approve; when `admin_uuids` is empty, this falls back to all online OPs for legacy servers
+- **High-impact tools** such as `run_console_command`, `write_config_file`, `broadcast`, and `spark_profiler_*` can never be permanently trusted; they require per-call approval.
 - Default bind is `127.0.0.1`; `allow_remote = true` flips to `0.0.0.0` — firewall accordingly.
 
 ## Wire-protocol gist
@@ -111,7 +130,7 @@ For agents without skill support, feed `.claude/skills/<name>/SKILL.md` directly
 - Frame = UTF-8 JSON, `v=0`. Three types: `request` / `response` (correlated by `id`, may arrive out of order) / `event` (only after `subscribe_events`).
 - **Pull is the default**: `get_recent_events` returns a slice of recent events from a server-side ring buffer. The agent only spends LLM tokens on what it asks for.
 - **Push** is retained for non-MCP clients (moderation bots, dashboards) via `subscribe_events`.
-- Error codes: `UNAUTHENTICATED` `INVALID_TOKEN` `UNSUPPORTED_VERSION` `UNKNOWN_TOOL` `INVALID_ARGS` `INTERNAL_ERROR` `TIMEOUT` `SPARK_UNAVAILABLE`.
+- Error codes: `UNAUTHENTICATED` `INVALID_TOKEN` `UNSUPPORTED_VERSION` `UNKNOWN_TOOL` `INVALID_ARGS` `APPROVAL_DENIED` `INTERNAL_ERROR` `TIMEOUT` `SPARK_UNAVAILABLE`.
 
 ## Roadmap
 

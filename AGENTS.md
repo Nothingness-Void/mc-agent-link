@@ -36,6 +36,18 @@ Origin: http://127.0.0.1
 6. Restart or reload the MCP host if needed.
 7. Verify by calling the `ping` tool.
 
+## In-game approval model
+
+After the MCP host is connected, tool execution may still require in-game approval.
+
+- `approval.auto_allow_tools`: run immediately without a prompt
+- `approval.trusted_tools`: remembered from the in-game `[always allow this tool]` button
+- ordinary approval: online OPs see clickable approval buttons in Minecraft chat
+- `approval.admin_only_tools`: only players listed in `[roles].admin_uuids` may approve
+- if `roles.admin_uuids` is empty: the server falls back to all online OPs so legacy servers still work
+
+If the MCP host (for example Claude Code) shows its own permission prompt first, allow the `minecraft` MCP server/tool there so the request can reach the Minecraft-side approval flow.
+
 If `/pair` returns `401`, read the JSON `reason` field:
 - `expired`: ask the user to send the latest refreshed setup link from the Minecraft server console.
 - `used`: tell the user the setup link was already consumed, possibly by another agent/MCP host, and ask for the latest refreshed setup link if needed.
@@ -62,5 +74,7 @@ Always read and merge existing config files; never overwrite unrelated MCP serve
 ## Safety
 
 The token grants Minecraft server operator-level actions through tools like `run_console_command`. Do not run destructive commands such as `stop`, `/op`, `/deop`, `/ban`, `/fill`, or `/kill @e` without explicit user confirmation.
+
+If a tool call returns `APPROVAL_DENIED`, explain that the in-game OP/admin denied it, no eligible approver was online, or the request timed out.
 
 For manual fallback and troubleshooting, read `INSTALL.md`.

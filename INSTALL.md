@@ -111,9 +111,61 @@ mcp_allowed_origins = ["null", "http://localhost", "http://127.0.0.1"]
 
 write_allow = ["config/**"]   # 写权限白名单
 write_deny = []
+
+[approval]
+enabled = true
+timeout_seconds = 60
+auto_allow_tools = [
+  "ping", "agent_heartbeat", "get_agent_requests", "update_agent_request_status", "reply_agent_request",
+  "list_online_players", "get_player_info", "list_mods", "get_server_stats",
+  "get_recent_events", "get_recent_logs", "subscribe_events", "unsubscribe_events",
+  "tick_profile", "thread_dump", "spark_status", "spark_stats", "spark_health_report"
+]
+trusted_tools = []
+admin_only_tools = [
+  "run_console_command", "write_config_file", "broadcast",
+  "spark_profiler_start", "spark_profiler_stop", "spark_profiler_cancel",
+  "read_server_file", "list_dir"
+]
+
+[roles]
+admin_uuids = []
+guest_uuids = []
 ```
 
 > **安全提示**:这个 token 等同于服务端 op 权限。如果用户在公开聊天里发,告诉他重新生成(把 toml 里 token 字段清空,重启服务器,会重新生成)。
+
+### 可选:Claude Code 权限交给游戏内审批
+
+mc-agent-link 会在 Minecraft 聊天里弹出 MCP 工具审批按钮。为了让请求能到达服务器,Claude Code 自己的 MCP 权限弹窗需要对 `minecraft` 服务器工具放行;最终是否执行由游戏内按钮决定。
+
+当前审批语义:
+
+- `approval.auto_allow_tools`：直接放行,不弹按钮
+- `approval.trusted_tools`：点过 `[始终允许该工具]` 后免重复审批
+- 普通工具：默认所有在线 OP 都能看到按钮,也都能执行 `/agentlink approve|deny|trust <id>`
+- `approval.admin_only_tools`：只有 `[roles].admin_uuids` 里的玩家能批准
+- 如果 `roles.admin_uuids = []`：回退到所有在线 OP,保持老服务器/未配角色服务器可用
+
+高风险工具仍不能被永久信任,只能逐次允许。
+
+### 可选:配置 admin 名单
+
+如果用户想把高风险审批严格限制给腐竹/管理员,填写 `[roles].admin_uuids`:
+
+```toml
+[roles]
+admin_uuids = [
+  "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+  "11111111-2222-3333-4444-555555555555"
+]
+```
+
+填写后:
+
+- `approval.admin_only_tools` 只会发按钮给这些 admin
+- 普通审批仍然发给所有在线 OP
+- 非 admin OP 即使手打 `/agentlink approve <id>` 也会被拒绝
 
 ### 可选:调整写权限
 
