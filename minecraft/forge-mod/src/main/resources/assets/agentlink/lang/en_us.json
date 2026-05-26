@@ -3,6 +3,10 @@
   "agentlink.request.canceled_by_operator": "canceled by operator",
   "agentlink.command.mcp_http_not_running": "MCP HTTP is not running; enable mcp_enabled and restart the server.",
   "agentlink.command.setup_link_generated": "New setup link generated. Expires at %s.",
+  "agentlink.command.setup_link_generated_tiered": "New setup link generated [%s]. Expires at %s.",
+  "agentlink.command.tokens.empty": "No issued tokens. (The master token in agent-link.toml is still valid as an implicit GUEST entry.)",
+  "agentlink.command.tokens.header": "Issued tokens (%d):",
+  "agentlink.command.tokens.revoked": "Revoked %d token(s) matching hash prefix \"%s\".",
   "agentlink.command.approval_service_not_running": "Approval service is not running.",
   "agentlink.approval.no_online_admins": "No online admins to approve admin-only MCP tool call: %s",
   "agentlink.approval.no_online_ops": "No online OPs to approve MCP tool call: %s",
@@ -67,5 +71,12 @@
   "agentlink.spark.output.health_report_generated": "Health report generated!",
   "agentlink.spark.output.upload_complete": "Upload complete!",
   "agentlink.spark.output.view_here": "View it here:",
-  "agentlink.spark.output.view_at": "View at:"
+  "agentlink.spark.output.view_at": "View at:",
+  "agentlink.audit.disabled": "Audit log is not enabled (audit.enabled = false or service not started).",
+  "agentlink.audit.path": "Audit log file: %s",
+  "agentlink.audit.tail.empty": "Audit log is empty.",
+  "agentlink.audit.tail.header": "Audit log (last %d lines):",
+  "agentlink.audit.tail.read_failed": "Failed to read audit log: %s",
+  "agentlink.audit.tail.too_many": "Too many lines requested (max %d).",
+  "agentlink.audit.require_admin": "/agent audit is admin-only (must be in [roles].admin_uuids)."
 }

@@ -89,17 +89,21 @@ public final class AgentToolApproval {
     public CompletableFuture<Decision> request(String toolName, JsonObject args, ClientSession session) {
         if (!cfg.approvalEnabled()) {
             AgentLinkMod.LOG.info("agent-link approval bypassed for tool {}: approval disabled", toolName);
-            return CompletableFuture.completedFuture(Decision.approved("approval disabled"));
+            return CompletableFuture.completedFuture(Decision.outcome(Outcome.APPROVAL_DISABLED, "approval disabled"));
+        }
+        if (CallTier.is(CallTier.Tier.CONSOLE)) {
+            AgentLinkMod.LOG.info("agent-link approval bypassed for tool {}: console-tier token", toolName);
+            return CompletableFuture.completedFuture(Decision.outcome(Outcome.CONSOLE_TRUSTED, "console-tier token"));
         }
         String normalizedTool = normalizeTool(toolName);
         if (isAutoAllowed(normalizedTool)) {
             AgentLinkMod.LOG.info("agent-link approval bypassed for tool {}: auto-allowed", toolName);
-            return CompletableFuture.completedFuture(Decision.approved("auto allowed"));
+            return CompletableFuture.completedFuture(Decision.outcome(Outcome.AUTO_ALLOW, "auto allowed"));
         }
         TrustRule trustHit = matchTrusted(normalizedTool, args);
         if (trustHit != null) {
             AgentLinkMod.LOG.info("agent-link approval bypassed for tool {}: trusted by rule {}", toolName, trustHit);
-            return CompletableFuture.completedFuture(Decision.approved("trusted: " + trustHit));
+            return CompletableFuture.completedFuture(Decision.trustedRule(trustHit));
         }
 
         // admin_only_tools narrows WHO sees the button (admin-only) when admins are configured.
@@ -118,7 +122,7 @@ public final class AgentToolApproval {
                 reason = AgentLinkLang.tr("agentlink.approval.no_online_ops", toolName);
             }
             AgentLinkMod.LOG.warn("agent-link approval denied before prompt for tool {}: {}", toolName, reason);
-            return CompletableFuture.completedFuture(Decision.denied(reason));
+            return CompletableFuture.completedFuture(Decision.outcome(Outcome.DENIED_NO_APPROVERS, reason));
         }
 
         String id = "approval-" + NEXT_ID.getAndIncrement();
@@ -143,7 +147,7 @@ public final class AgentToolApproval {
             return auth;
         }
         approval.cancelTimeout();
-        approval.future().complete(Decision.approved(AgentLinkLang.tr("agentlink.approval.decision.approved_by", actor)));
+        approval.future().complete(Decision.approvedBy(actor, actorUuid, AgentLinkLang.tr("agentlink.approval.decision.approved_by", actor)));
         broadcastLocalized("agentlink.approval.broadcast.approved", ChatFormatting.GREEN, id, approval.toolName());
         return new CommandResult(true, AgentLinkLang.tr("agentlink.approval.command.approved", id));
     }
@@ -157,7 +161,7 @@ public final class AgentToolApproval {
             return auth;
         }
         approval.cancelTimeout();
-        approval.future().complete(Decision.denied(AgentLinkLang.tr("agentlink.approval.decision.denied_by", actor)));
+        approval.future().complete(Decision.deniedBy(actor, actorUuid, AgentLinkLang.tr("agentlink.approval.decision.denied_by", actor)));
         broadcastLocalized("agentlink.approval.broadcast.denied", ChatFormatting.RED, id, approval.toolName());
         return new CommandResult(true, AgentLinkLang.tr("agentlink.approval.command.denied", id));
     }
@@ -177,7 +181,8 @@ public final class AgentToolApproval {
         approval.cancelTimeout();
         TrustRule rule = TrustRule.whole(approval.normalizedTool());
         addRule(rule);
-        approval.future().complete(Decision.approved(AgentLinkLang.tr("agentlink.approval.decision.trusted_by", actor)));
+        approval.future().complete(Decision.trustedByActor(rule, actor, actorUuid,
+                AgentLinkLang.tr("agentlink.approval.decision.trusted_by", actor)));
         broadcastLocalized("agentlink.approval.broadcast.trusted", ChatFormatting.GREEN, id, approval.toolName());
         return new CommandResult(true, AgentLinkLang.tr("agentlink.approval.command.trusted", approval.toolName()));
     }
@@ -203,7 +208,8 @@ public final class AgentToolApproval {
         }
         approval.cancelTimeout();
         addRule(rule);
-        approval.future().complete(Decision.approved(AgentLinkLang.tr("agentlink.approval.decision.trusted_by", actor)));
+        approval.future().complete(Decision.trustedByActor(rule, actor, actorUuid,
+                AgentLinkLang.tr("agentlink.approval.decision.trusted_by", actor)));
         broadcastLocalized("agentlink.approval.broadcast.trusted_pattern", ChatFormatting.GREEN, id, rule.toString());
         return new CommandResult(true, AgentLinkLang.tr("agentlink.approval.command.trusted_pattern", rule.toString()));
     }
@@ -243,7 +249,7 @@ public final class AgentToolApproval {
     private void timeout(String id) {
         PendingApproval approval = pending.remove(id);
         if (approval == null) return;
-        approval.future().complete(Decision.denied(AgentLinkLang.tr("agentlink.approval.timeout_reason")));
+        approval.future().complete(Decision.outcome(Outcome.TIMED_OUT, AgentLinkLang.tr("agentlink.approval.timeout_reason")));
         mc.execute(() -> broadcastLocalized("agentlink.approval.broadcast.timeout", ChatFormatting.YELLOW, id, approval.toolName()));
     }
 
@@ -383,7 +389,7 @@ public final class AgentToolApproval {
     private void stop() {
         for (PendingApproval approval : pending.values()) {
             approval.cancelTimeout();
-            approval.future().complete(Decision.denied(AgentLinkLang.tr("agentlink.approval.server_stopping")));
+            approval.future().complete(Decision.outcome(Outcome.SERVER_STOPPING, AgentLinkLang.tr("agentlink.approval.server_stopping")));
         }
         pending.clear();
         scheduler.shutdownNow();
@@ -444,13 +450,52 @@ public final class AgentToolApproval {
         return head + " *";
     }
 
-    public record Decision(boolean approved, String reason) {
+    public enum Outcome {
+        AUTO_ALLOW,
+        APPROVAL_DISABLED,
+        TRUSTED_RULE,
+        CONSOLE_TRUSTED,
+        APPROVED,
+        DENIED,
+        DENIED_NO_APPROVERS,
+        TIMED_OUT,
+        SERVER_STOPPING
+    }
+
+    public record Decision(boolean approved, Outcome outcome, String actor, java.util.UUID actorUuid,
+                           String trustRule, String reason) {
+        /** Backward-compatible: assume non-actor approval. */
         public static Decision approved(String reason) {
-            return new Decision(true, reason);
+            return new Decision(true, Outcome.APPROVED, null, null, null, reason);
         }
 
         public static Decision denied(String reason) {
-            return new Decision(false, reason);
+            return new Decision(false, Outcome.DENIED, null, null, null, reason);
+        }
+
+        public static Decision outcome(Outcome outcome, String reason) {
+            boolean approved = outcome == Outcome.AUTO_ALLOW
+                    || outcome == Outcome.APPROVAL_DISABLED
+                    || outcome == Outcome.TRUSTED_RULE
+                    || outcome == Outcome.CONSOLE_TRUSTED
+                    || outcome == Outcome.APPROVED;
+            return new Decision(approved, outcome, null, null, null, reason);
+        }
+
+        public static Decision trustedRule(TrustRule rule) {
+            return new Decision(true, Outcome.TRUSTED_RULE, null, null, rule.toString(), "trusted: " + rule);
+        }
+
+        public static Decision approvedBy(String actor, java.util.UUID actorUuid, String reason) {
+            return new Decision(true, Outcome.APPROVED, actor, actorUuid, null, reason);
+        }
+
+        public static Decision deniedBy(String actor, java.util.UUID actorUuid, String reason) {
+            return new Decision(false, Outcome.DENIED, actor, actorUuid, null, reason);
+        }
+
+        public static Decision trustedByActor(TrustRule rule, String actor, java.util.UUID actorUuid, String reason) {
+            return new Decision(true, Outcome.TRUSTED_RULE, actor, actorUuid, rule.toString(), reason);
         }
     }
 

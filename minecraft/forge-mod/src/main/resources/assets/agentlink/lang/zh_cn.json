@@ -3,6 +3,10 @@
   "agentlink.request.canceled_by_operator": "已由操作员取消",
   "agentlink.command.mcp_http_not_running": "MCP HTTP 未运行；请启用 mcp_enabled 并重启服务器。",
   "agentlink.command.setup_link_generated": "已生成新的 setup link，过期时间: %s。",
+  "agentlink.command.setup_link_generated_tiered": "已生成新的 setup link [%s]，过期时间: %s。",
+  "agentlink.command.tokens.empty": "当前没有已颁发的 token（仅 agent-link.toml master token 隐式有效，作为 GUEST）。",
+  "agentlink.command.tokens.header": "已颁发的 token 共 %d 个：",
+  "agentlink.command.tokens.revoked": "已撤销 %d 个匹配 hash 前缀 \"%s\" 的 token。",
   "agentlink.command.approval_service_not_running": "审批服务未运行。",
   "agentlink.approval.no_online_admins": "当前没有在线管理员可审批该仅管理员可用的 MCP 工具调用: %s",
   "agentlink.approval.no_online_ops": "当前没有在线 OP 可审批该 MCP 工具调用: %s",
@@ -67,5 +71,12 @@
   "agentlink.spark.output.health_report_generated": "健康报告已生成！",
   "agentlink.spark.output.upload_complete": "上传完成！",
   "agentlink.spark.output.view_here": "查看链接：",
-  "agentlink.spark.output.view_at": "查看链接："
+  "agentlink.spark.output.view_at": "查看链接：",
+  "agentlink.audit.disabled": "审计日志当前未启用（audit.enabled = false 或服务尚未启动）。",
+  "agentlink.audit.path": "审计日志文件: %s",
+  "agentlink.audit.tail.empty": "审计日志为空。",
+  "agentlink.audit.tail.header": "审计日志（最后 %d 行）：",
+  "agentlink.audit.tail.read_failed": "读取审计日志失败: %s",
+  "agentlink.audit.tail.too_many": "tail 行数过多 (最多 %d)。",
+  "agentlink.audit.require_admin": "/agent audit 仅限管理员使用（需在 [roles].admin_uuids 中）。"
 }

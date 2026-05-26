@@ -1,10 +1,18 @@
 # MCP Tools reference
 
-This page lists every MCP tool registered by `mc-agent-link` (base mod) at startup and what each one does. Versions covered: **0.2.4-alpha** (base) + **0.3.4-alpha** (`mc-agent-link-agent` addon).
+This page lists every MCP tool registered by `mc-agent-link` (base mod) at startup and what each one does. Versions covered: **0.4.0-alpha** (base + `mc-agent-link-agent` addon — version numbers unified starting this release).
 
 > Tools that an addon adds via `AgentLinkApi.registerTool(modId, tool)` get a `<modid>__` prefix and appear in MCP `tools/list` automatically; this page only documents the base mod set.
 
 ## Approval tiers (config in `config/agent-link.toml`)
+
+Two independent dimensions decide whether a tool call goes through in-game approval:
+
+1. **Token tier** (which bearer token the caller is using):
+   - **CONSOLE** — minted by `/agentlink pair`. Whoever runs that command in the terminal/console is presumed to supervise the agent in real time. Every tool call from a CONSOLE token bypasses in-game approval entirely (including `admin_only_tools`). Audit log records `outcome: console_trusted`.
+   - **GUEST** — minted by `/agentlink pair-guest`, OR the legacy master `token` field in `agent-link.toml` (auto-implicit). Goes through the per-tool table below. Used for in-game `/agent` calls (the addon Claude bridge inherits this), or any third-party MCP host you don't fully control.
+
+2. **Per-tool tier** (only consulted when the token is GUEST):
 
 | Tier | Reaches Claude | Who can approve | Default members |
 |---|---|---|---|
@@ -105,6 +113,22 @@ A non-OP player cannot approve anything. The `/agentlink` command tree itself re
 | `save_block_snapshot` | `{ name, min, max, dim? }` (volume ≤ 65536) | saves palette+RLE to `config/agent-link/snapshots/<name>.json`. No restore yet. |
 | `get_scoreboard` | `{ mode? = "objectives" / "objective" / "teams", name? }` | objectives summary, full per-player scores for one objective, or team list with members. |
 
+## WorldEdit / FAWE integration (read-only auto-allowed; mutating ops are admin-only)
+
+Bridge to [WorldEdit](https://enginehub.org/worldedit) (and FAWE when present). `we_status`
+reports whether either is installed; the rest stay disabled with a clear error otherwise.
+Each successful mutating op pushes its `EditSession` onto a shared agent undo stack so
+`we_undo` can reverse the last N ops.
+
+| Tool | Tier | Args | Notes |
+|---|---|---|---|
+| `we_status` | 1 | none | `{ available, implementation: "WorldEdit"/"FastAsyncWorldEdit", version, fawe_version?, undo_depth }` |
+| `we_set` | 4 | `{ min, max, block, dim? }` | fill cuboid (volume ≤ 200 000); pure WE replace, undoable |
+| `we_replace` | 4 | `{ min, max, from, to, dim? }` | `from` = string or array of block ids; replace each match with `to` |
+| `we_sphere` | 4 | `{ center, radius (≤50), block, hollow?, dim? }` | sphere via WE `makeSphere` |
+| `we_cyl` | 4 | `{ center, radius (≤50), height (≤256), block, hollow?, dim? }` | bottom-centered cylinder via WE `makeCylinder` |
+| `we_undo` | 4 | `{ steps? (1-10), dim? }` | pops the most recent N edit sessions and reverses them |
+
 ---
 
 ## Operator commands
@@ -113,15 +137,30 @@ A non-OP player cannot approve anything. The `/agentlink` command tree itself re
 |---|---|
 | `/agent <text>` | OP: queue an in-game request to the connected agent (provided by `mc-agent-link-agent`) |
 | `/agent status` / `cancel <id>` / `reload` | inspect / cancel / reload addon config |
-| `/agentlink pair` | rotate the one-time MCP setup link |
+| `/agentlink pair` | rotate the one-time MCP setup link as a **CONSOLE** token (skips in-game approval) |
+| `/agentlink pair-guest` | rotate the one-time MCP setup link as a **GUEST** token (always goes through in-game approval) |
 | `/agentlink approve <id>` / `deny <id>` | resolve the chat approval prompt |
 | `/agentlink trust <id>` | add a **whole-tool** rule to `approval.trusted_tools` |
 | `/agentlink trustpattern <id>` | add a **parameter-glob** rule (auto-derived from current call) |
 | `/agentlink trustlist` | list all current trust rules |
 | `/agentlink untrust <rule>` | remove one rule (use the exact string from `trustlist`) |
 | `/agentlink approvals` | summary of pending approvals |
+| `/agentlink tokens` | list issued tokens (hash prefix, tier, label, issued_at, last_used_at) |
+| `/agentlink tokens revoke <hash-prefix>` | revoke one or more issued tokens by SHA-256 hash prefix |
+| `/agentlink audit path` | print absolute path of `logs/agentlink-audit.log` (admin-only when `admin_uuids` is configured) |
+| `/agentlink audit tail [N]` | print the last N (default 20, max 200) audit lines (admin-only when `admin_uuids` is configured) |
 
 All `/agentlink` subcommands require `hasPermission(2)`. Admin-only approvals additionally require the actor's UUID to be in `[roles].admin_uuids`.
+
+## Audit log
+
+When `audit.enabled = true` (default), every MCP tool invocation appends a single JSON line to `logs/agentlink-audit.log`. Read with `/agentlink audit tail` or feed the file into `jq`:
+
+```jsonl
+{"ts":"2026-05-26T18:33:00Z","tool":"run_console_command","outcome":"approved","actor":"void","actor_uuid":"...","reason":"approved by void","result_ok":true,"args_json":"{\"command\":{\"redacted\":true,\"length\":18}}"}
+```
+
+Sensitive fields are redacted via `audit.redact_args` (`tool.argkey` format). Defaults: `run_console_command.command`, `write_config_file.content`, `write_config_file.base64`, `read_config.content`. Extend the list for any addon tool whose arg or returned content is sensitive.
 
 ## Adding a tool from your own mod
 

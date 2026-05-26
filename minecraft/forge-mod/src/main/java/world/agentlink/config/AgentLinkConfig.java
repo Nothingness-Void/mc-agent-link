@@ -35,6 +35,9 @@ public final class AgentLinkConfig {
             List<String> approvalAdminOnlyTools,
             List<UUID> roleAdminUuids,
             List<UUID> roleGuestUuids,
+            boolean auditEnabled,
+            List<String> auditRedactArgs,
+            int auditMaxArgChars,
             String version
     ) {}
 
@@ -57,6 +60,8 @@ public final class AgentLinkConfig {
             "command", "find_players", "get_item_info", "get_recipes_for", "get_block_drops",
             // Tier-C read-only / read-config / snapshot.
             "read_config", "save_block_snapshot", "get_scoreboard",
+            // WorldEdit read-only.
+            "we_status",
             // Diagnostics / logs / events.
             "get_recent_events", "get_recent_logs", "subscribe_events", "unsubscribe_events",
             "tick_profile", "thread_dump",
@@ -71,7 +76,18 @@ public final class AgentLinkConfig {
             // Sensitive filesystem access (can read agent-link.toml token, ops.json, world data).
             "read_server_file", "list_dir",
             // Container peek bypasses the open animation; treat as snooping and require admin.
-            "get_container"
+            "get_container",
+            // WorldEdit mutating operations (each call can flip thousands of blocks).
+            "we_set", "we_replace", "we_sphere", "we_cyl", "we_undo"
+    );
+    private static final List<String> DEFAULT_AUDIT_REDACT_ARGS = List.of(
+            // Console payload often contains tokens, op-set commands, /seed output, etc.
+            "run_console_command.command",
+            // write_config_file content can be a key file or anything
+            "write_config_file.content",
+            "write_config_file.base64",
+            // read_config returns file content — masked at record time, but list it for traceability.
+            "read_config.content"
     );
     private static volatile Snapshot CURRENT;
 
@@ -106,6 +122,10 @@ public final class AgentLinkConfig {
             List<String> approvalAdminOnlyTools = readStringList(cfg, "approval.admin_only_tools", DEFAULT_APPROVAL_ADMIN_ONLY_TOOLS);
             List<UUID> roleAdminUuids = readUuidList(cfg, "roles.admin_uuids");
             List<UUID> roleGuestUuids = readUuidList(cfg, "roles.guest_uuids");
+
+            boolean auditEnabled = cfg.getOrElse("audit.enabled", true);
+            List<String> auditRedactArgs = readStringList(cfg, "audit.redact_args", DEFAULT_AUDIT_REDACT_ARGS);
+            int auditMaxArgChars = Math.max(64, cfg.getIntOrElse("audit.max_arg_chars", 2000));
 
             if (token.isBlank()) {
                 token = generateToken();
@@ -177,6 +197,23 @@ public final class AgentLinkConfig {
                     "\n Explicit guests. Optional — when empty, anyone NOT in admin_uuids is treated as guest by add-on mods.\n" +
                     " Use this list to mark specific players as \"chat-only\", e.g. for trusted but non-admin testers.");
 
+            cfg.set("audit.enabled", auditEnabled);
+            cfg.setComment("audit.enabled",
+                    "\n Per-call audit log. When true, every MCP tool invocation appends a JSONL line to logs/agentlink-audit.log\n" +
+                    " (one JSON object per line). Includes timestamp, tool, outcome (auto_allow / trusted / approved / denied / timeout),\n" +
+                    " approver actor + UUID when applicable, the matching trust rule when applicable, and the call args (with secrets\n" +
+                    " redacted per audit.redact_args). Read with /agent audit tail.");
+            cfg.set("audit.redact_args", auditRedactArgs);
+            cfg.setComment("audit.redact_args",
+                    "\n Args / result keys whose VALUES are replaced with {redacted=true,length=...} before being written to the audit\n" +
+                    " log. Format: \"tool.argkey\". Default redacts run_console_command.command, write_config_file.content/base64, and\n" +
+                    " read_config returned content — anything that can carry tokens, OP-set commands, or full file dumps. Add tool.argkey\n" +
+                    " entries here for any addon tool whose arg is sensitive.");
+            cfg.set("audit.max_arg_chars", auditMaxArgChars);
+            cfg.setComment("audit.max_arg_chars",
+                    "\n Hard truncation cap on the per-line args JSON in the audit log. Anything longer is truncated and a\n" +
+                    " {truncated_at=N} marker is appended. Default 2000.");
+
             cfg.save();
             CURRENT = new Snapshot(port, allowRemote, token, writeAllow, writeDeny,
                     mcpEnabled, mcpPort, mcpAllowedOrigins,
@@ -184,7 +221,10 @@ public final class AgentLinkConfig {
                     java.util.Collections.unmodifiableList(approvalAdminOnlyTools),
                     java.util.Collections.unmodifiableList(roleAdminUuids),
                     java.util.Collections.unmodifiableList(roleGuestUuids),
-                    "0.2.4-alpha");
+                    auditEnabled,
+                    java.util.Collections.unmodifiableList(auditRedactArgs),
+                    auditMaxArgChars,
+                    "0.4.0-alpha");
 
             if (fresh) {
                 AgentLinkMod.LOG.info("agent-link wrote default config to {}", path);
@@ -253,6 +293,7 @@ public final class AgentLinkConfig {
                         snap.approvalTimeoutSeconds(), snap.approvalAutoAllowTools(), trusted,
                         snap.approvalAdminOnlyTools(),
                         snap.roleAdminUuids(), snap.roleGuestUuids(),
+                        snap.auditEnabled(), snap.auditRedactArgs(), snap.auditMaxArgChars(),
                         snap.version());
             }
         }
@@ -283,6 +324,7 @@ public final class AgentLinkConfig {
                         snap.approvalTimeoutSeconds(), snap.approvalAutoAllowTools(), trusted,
                         snap.approvalAdminOnlyTools(),
                         snap.roleAdminUuids(), snap.roleGuestUuids(),
+                        snap.auditEnabled(), snap.auditRedactArgs(), snap.auditMaxArgChars(),
                         snap.version());
             }
         }

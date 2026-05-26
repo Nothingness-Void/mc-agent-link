@@ -7,6 +7,7 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
 import world.agentlink.AgentLinkMod;
+import world.agentlink.approval.CallTier;
 import world.agentlink.config.AgentLinkConfig.Snapshot;
 import world.agentlink.dispatch.RequestDispatcher;
 
@@ -57,6 +58,7 @@ public final class McpHttpServer implements HttpHandler {
     private String pairCode;
     private long pairExpiresAtMs;
     private boolean pairConsumed;
+    private IssuedTokens.Tier pairTier = IssuedTokens.Tier.CONSOLE;
     private HttpServer server;
 
     public McpHttpServer(Snapshot cfg, RequestDispatcher dispatcher) {
@@ -112,6 +114,7 @@ public final class McpHttpServer implements HttpHandler {
         payload.addProperty("expires_at", pairExpiresAtMs);
         payload.addProperty("expires_at_iso", Instant.ofEpochMilli(pairExpiresAtMs).toString());
         payload.addProperty("allow_remote", cfg.allowRemote());
+        payload.addProperty("token_tier", pairTier.name().toLowerCase(Locale.ROOT));
         String encoded = Base64.getUrlEncoder().withoutPadding()
                 .encodeToString(payload.toString().getBytes(StandardCharsets.UTF_8));
         return SETUP_LINK_BASE + "#agent-link-setup=" + encoded;
@@ -121,16 +124,28 @@ public final class McpHttpServer implements HttpHandler {
         return pairExpiresAtMs;
     }
 
-    public SetupLink refreshSetupLink() {
+    /**
+     * Refresh the pair code. The next successful {@code /pair} will mint a token at the given
+     * tier. Defaults to CONSOLE — the assumption is that whoever runs {@code /agentlink pair}
+     * has terminal-side oversight. Use {@link IssuedTokens.Tier#GUEST} for {@code /agentlink
+     * pair-guest} (in-game-pure flow that still needs OP approval per call).
+     */
+    public SetupLink refreshSetupLink(IssuedTokens.Tier tier) {
         SetupLink fresh;
         synchronized (this) {
+            this.pairTier = tier == null ? IssuedTokens.Tier.CONSOLE : tier;
             rotatePairCode();
             fresh = new SetupLink(setupLink(), pairExpiresAtMs);
         }
-        AgentLinkMod.LOG.info("agent-link setup link manually refreshed (send this to your AI agent, one use, expires at {}): {}",
-                Instant.ofEpochMilli(fresh.expiresAtMs()), fresh.link());
+        AgentLinkMod.LOG.info("agent-link setup link manually refreshed (send this to your AI agent, one use, expires at {}, tier={}): {}",
+                Instant.ofEpochMilli(fresh.expiresAtMs()), this.pairTier.name().toLowerCase(Locale.ROOT), fresh.link());
         schedulePairRefresh();
         return fresh;
+    }
+
+    /** Backward-compatible: defaults to console tier. */
+    public SetupLink refreshSetupLink() {
+        return refreshSetupLink(IssuedTokens.Tier.CONSOLE);
     }
 
     public record SetupLink(String link, long expiresAtMs) {}
@@ -138,6 +153,17 @@ public final class McpHttpServer implements HttpHandler {
     @Override
     public void handle(HttpExchange ex) throws IOException {
         try (ex) {
+            try {
+                handleRpc(ex);
+            } finally {
+                CallTier.clear();
+            }
+        } catch (Exception e) {
+            AgentLinkMod.LOG.warn("agent-link MCP request crashed", e);
+        }
+    }
+
+    private void handleRpc(HttpExchange ex) throws IOException {
             String method = ex.getRequestMethod();
 
             if ("GET".equalsIgnoreCase(method)) {
@@ -160,11 +186,13 @@ public final class McpHttpServer implements HttpHandler {
             }
 
             String authz = firstHeader(ex, "Authorization");
-            if (!tokenMatches(authz)) {
+            CallTier.Tier tier = resolveTokenTier(authz);
+            if (tier == null) {
                 ex.getResponseHeaders().add("WWW-Authenticate", "Bearer realm=\"agent-link\"");
                 writeStatus(ex, 401, "Bearer token required");
                 return;
             }
+            CallTier.set(tier);
 
             String accept = firstHeader(ex, "Accept");
             if (accept != null && !accept.isBlank() && !acceptsJson(accept)) {
@@ -208,9 +236,6 @@ public final class McpHttpServer implements HttpHandler {
                 return;
             }
             writeJson(ex, 200, response);
-        } catch (Exception e) {
-            AgentLinkMod.LOG.warn("agent-link MCP request crashed", e);
-        }
     }
 
     private void handlePair(HttpExchange ex) throws IOException {
@@ -290,8 +315,15 @@ public final class McpHttpServer implements HttpHandler {
         pairConsumed = true;
         addUsedPairCode(pairCode);
 
+        // Mint a fresh per-pair token at the chosen tier so each consumer has its own bearer.
+        // The legacy master `cfg.token()` continues to work as an implicit GUEST fallback.
+        String mintedToken = IssuedTokens.generateToken();
+        IssuedTokens.current().register(mintedToken, pairTier,
+                "pair-" + pairTier.name().toLowerCase(Locale.ROOT) + "-"
+                        + Long.toString(System.currentTimeMillis(), 36));
+
         JsonObject headers = new JsonObject();
-        headers.addProperty("Authorization", "Bearer " + cfg.token());
+        headers.addProperty("Authorization", "Bearer " + mintedToken);
 
         JsonObject mcp = new JsonObject();
         mcp.addProperty("type", "http");
@@ -301,6 +333,7 @@ public final class McpHttpServer implements HttpHandler {
         JsonObject server = new JsonObject();
         server.addProperty("minecraft", true);
         server.addProperty("version", cfg.version());
+        server.addProperty("token_tier", pairTier.name().toLowerCase(Locale.ROOT));
 
         JsonObject result = new JsonObject();
         result.add("mcp", mcp);
@@ -395,6 +428,31 @@ public final class McpHttpServer implements HttpHandler {
         if (!authz.regionMatches(true, 0, prefix, 0, prefix.length())) return false;
         String token = authz.substring(prefix.length()).trim();
         return constantTimeEquals(token, cfg.token());
+    }
+
+    /**
+     * Resolve the tier of the bearer token in {@code authz}. Returns {@code null} when no
+     * recognized token is present. Order:
+     * <ol>
+     *   <li>{@link IssuedTokens} registry (CONSOLE / GUEST as recorded by /agentlink pair*)</li>
+     *   <li>Legacy master token in {@code agent-link.toml} → implicit GUEST</li>
+     * </ol>
+     */
+    private CallTier.Tier resolveTokenTier(String authz) {
+        if (authz == null) return null;
+        String prefix = "Bearer ";
+        if (authz.length() <= prefix.length()) return null;
+        if (!authz.regionMatches(true, 0, prefix, 0, prefix.length())) return null;
+        String token = authz.substring(prefix.length()).trim();
+        if (token.isEmpty()) return null;
+        IssuedTokens.Entry entry = IssuedTokens.current().lookup(token);
+        if (entry != null) {
+            return entry.tier() == IssuedTokens.Tier.CONSOLE ? CallTier.Tier.CONSOLE : CallTier.Tier.GUEST;
+        }
+        if (constantTimeEquals(token, cfg.token())) {
+            return CallTier.Tier.GUEST;
+        }
+        return null;
     }
 
     private static boolean constantTimeEquals(String a, String b) {

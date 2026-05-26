@@ -6,6 +6,7 @@ import com.google.gson.JsonObject;
 import net.minecraft.server.MinecraftServer;
 import world.agentlink.AgentLinkMod;
 import world.agentlink.approval.AgentToolApproval;
+import world.agentlink.audit.AuditLog;
 import world.agentlink.dispatch.tools.AgentHeartbeatTool;
 import world.agentlink.dispatch.tools.BroadcastTool;
 import world.agentlink.dispatch.tools.CommandTool;
@@ -49,6 +50,12 @@ import world.agentlink.dispatch.tools.ThreadDumpTool;
 import world.agentlink.dispatch.tools.TickProfileTool;
 import world.agentlink.dispatch.tools.UnsubscribeEventsTool;
 import world.agentlink.dispatch.tools.UpdateAgentRequestStatusTool;
+import world.agentlink.dispatch.tools.WeCylTool;
+import world.agentlink.dispatch.tools.WeReplaceTool;
+import world.agentlink.dispatch.tools.WeSetTool;
+import world.agentlink.dispatch.tools.WeSphereTool;
+import world.agentlink.dispatch.tools.WeStatusTool;
+import world.agentlink.dispatch.tools.WeUndoTool;
 import world.agentlink.dispatch.tools.WriteConfigFileTool;
 import world.agentlink.transport.ClientSession;
 
@@ -129,6 +136,14 @@ public class RequestDispatcher {
         registerBuiltin(new ReadConfigTool(mc));
         registerBuiltin(new SaveBlockSnapshotTool(mc));
         registerBuiltin(new GetScoreboardTool(mc));
+
+        // WorldEdit integration (added in 0.2.6)
+        registerBuiltin(new WeStatusTool(mc));
+        registerBuiltin(new WeSetTool(mc));
+        registerBuiltin(new WeReplaceTool(mc));
+        registerBuiltin(new WeSphereTool(mc));
+        registerBuiltin(new WeCylTool(mc));
+        registerBuiltin(new WeUndoTool(mc));
 
         synchronized (PRE_REGISTERED_LOCK) {
             for (RegisteredEntry entry : PRE_REGISTERED) {
@@ -239,35 +254,43 @@ public class RequestDispatcher {
                        BiConsumer<JsonObject, ToolException> done) {
         Tool tool = tools.get(toolName);
         if (tool == null) {
-            done.accept(null, new ToolException("UNKNOWN_TOOL", "No such tool: " + toolName));
+            ToolException err = new ToolException("UNKNOWN_TOOL", "No such tool: " + toolName);
+            AuditLog.record(toolName, args, null, false, err.code(), err.getMessage(), null);
+            done.accept(null, err);
             return;
         }
         AgentToolApproval approval = AgentToolApproval.current();
         if (approval != null) {
             approval.request(toolName, args, session).thenAccept(decision -> {
                 if (!decision.approved()) {
+                    AuditLog.record(toolName, args, decision, false, "APPROVAL_DENIED", decision.reason(), null);
                     done.accept(null, new ToolException("APPROVAL_DENIED", decision.reason()));
                     return;
                 }
-                invokeApproved(toolName, args, session, done, tool);
+                invokeApproved(toolName, args, session, done, tool, decision);
             });
             return;
         }
-        invokeApproved(toolName, args, session, done, tool);
+        invokeApproved(toolName, args, session, done, tool, null);
     }
 
     private void invokeApproved(String toolName, JsonObject args, ClientSession session,
-                                BiConsumer<JsonObject, ToolException> done, Tool tool) {
+                                BiConsumer<JsonObject, ToolException> done, Tool tool,
+                                AgentToolApproval.Decision decision) {
         mc.execute(() -> {
             try {
                 JsonObject result = tool.invoke(args, session);
+                AuditLog.record(toolName, args, decision, true, null, null, result);
                 done.accept(result, null);
             } catch (ToolException te) {
+                AuditLog.record(toolName, args, decision, false, te.code(), te.getMessage(), null);
                 done.accept(null, te);
             } catch (Throwable t) {
                 AgentLinkMod.LOG.error("agent-link tool {} crashed", toolName, t);
-                done.accept(null, new ToolException("INTERNAL_ERROR",
-                        t.getClass().getSimpleName() + ": " + t.getMessage()));
+                ToolException te = new ToolException("INTERNAL_ERROR",
+                        t.getClass().getSimpleName() + ": " + t.getMessage());
+                AuditLog.record(toolName, args, decision, false, te.code(), te.getMessage(), null);
+                done.accept(null, te);
             }
         });
     }

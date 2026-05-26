@@ -53,6 +53,10 @@ repositories {
         name = 'lucko'
         url = 'https://repo.lucko.me/'
     }
+    maven {
+        name = 'enginehub'
+        url = 'https://maven.enginehub.org/repo/'
+    }
 }
 
 configurations {
@@ -73,6 +77,14 @@ dependencies {
     // Spark API — compileOnly so we don't bundle it. SparkBridge probes for the
     // implementation at runtime and stays inert if spark isn't installed.
     compileOnly 'me.lucko:spark-api:0.1-SNAPSHOT'
+
+    // WorldEdit API — compileOnly so we don't bundle WE itself. WorldEditBridge
+    // probes for the implementation at runtime and stays inert if WE/FAWE isn't
+    // installed. transitive=false so we only get worldedit-core's own classes
+    // (no logging, no DI framework, no platform adapters).
+    compileOnly('com.sk89q.worldedit:worldedit-core:7.3.0') {
+        transitive = false
+    }
 }
 
 shadowJar {
