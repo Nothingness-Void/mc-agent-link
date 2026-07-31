@@ -43,20 +43,13 @@ public class GetBlocksRegionTool implements Tool {
     @Override
     public JsonObject invoke(JsonObject args, ClientSession session) throws ToolException {
         ServerLevel level = GetBlockTool.resolveDimension(mc, args);
-        JsonObject min = requireObj(args, "min");
-        JsonObject max = requireObj(args, "max");
-        int x1 = GetBlockTool.requireInt(min, "x");
-        int y1 = GetBlockTool.requireInt(min, "y");
-        int z1 = GetBlockTool.requireInt(min, "z");
-        int x2 = GetBlockTool.requireInt(max, "x");
-        int y2 = GetBlockTool.requireInt(max, "y");
-        int z2 = GetBlockTool.requireInt(max, "z");
+        // Via ToolArgs so both {x,y,z} and [x,y,z] work, consistent with every 0.5.0 spatial tool.
+        world.agentlink.dispatch.ToolArgs.Box box = world.agentlink.dispatch.ToolArgs.requireBox(args);
+        int xLo = box.minX(), xHi = box.maxX();
+        int yLo = box.minY(), yHi = box.maxY();
+        int zLo = box.minZ(), zHi = box.maxZ();
 
-        int xLo = Math.min(x1, x2), xHi = Math.max(x1, x2);
-        int yLo = Math.min(y1, y2), yHi = Math.max(y1, y2);
-        int zLo = Math.min(z1, z2), zHi = Math.max(z1, z2);
-
-        long volume = (long) (xHi - xLo + 1) * (yHi - yLo + 1) * (zHi - zLo + 1);
+        long volume = box.volume();
         if (volume > MAX_VOLUME) {
             throw new ToolException("INVALID_ARGS",
                     "Region volume " + volume + " exceeds limit " + MAX_VOLUME + " — split into smaller chunks");

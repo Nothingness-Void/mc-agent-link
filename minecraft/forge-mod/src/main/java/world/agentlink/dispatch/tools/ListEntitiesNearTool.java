@@ -44,10 +44,13 @@ public class ListEntitiesNearTool implements Tool {
     @Override
     public JsonObject invoke(JsonObject args, ClientSession session) throws ToolException {
         ServerLevel level = GetBlockTool.resolveDimension(mc, args);
-        JsonObject center = requireObj(args, "center");
-        double cx = GetBlockTool.requireDouble(center, "x");
-        double cy = GetBlockTool.requireDouble(center, "y");
-        double cz = GetBlockTool.requireDouble(center, "z");
+        // Via ToolArgs so {x,y,z} and [x,y,z] both work. Accepting only the object form here while
+        // the 0.5.0 tools accept both is the kind of inconsistency an agent burns a call discovering.
+        world.agentlink.dispatch.ToolArgs.DoublePos centerPos =
+                world.agentlink.dispatch.ToolArgs.requireDoublePos(args, "center");
+        double cx = centerPos.x();
+        double cy = centerPos.y();
+        double cz = centerPos.z();
         double radius = args.has("radius") && !args.get("radius").isJsonNull()
                 ? args.get("radius").getAsDouble()
                 : 16.0;

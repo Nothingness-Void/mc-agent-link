@@ -29,13 +29,31 @@ public class WeSphereTool implements Tool {
         return "we_sphere";
     }
 
+    /** Declare the sphere's bounding cube so a build zone can exempt this call. */
+    @Override
+    public void declareScope(JsonObject args) {
+        try {
+            world.agentlink.dispatch.ToolArgs.IntPos c =
+                    world.agentlink.dispatch.ToolArgs.requireIntPos(args, "center");
+            int r = (int) Math.ceil(world.agentlink.dispatch.ToolArgs.requireDouble(args, "radius"));
+            world.agentlink.sandbox.BuildZones.declareScope(args,
+                    world.agentlink.dispatch.ToolArgs.optString(args, "dim", Dimensions.DEFAULT),
+                    new world.agentlink.dispatch.ToolArgs.Box(
+                            c.x() - r, c.y() - r, c.z() - r,
+                            c.x() + r, c.y() + r, c.z() + r));
+        } catch (ToolException ignored) {
+        }
+    }
+
     @Override
     public JsonObject invoke(JsonObject args, ClientSession session) throws ToolException {
         ServerLevel level = GetBlockTool.resolveDimension(mc, args);
-        JsonObject c = WeSetTool.requireObj(args, "center");
-        int cx = GetBlockTool.requireInt(c, "x");
-        int cy = GetBlockTool.requireInt(c, "y");
-        int cz = GetBlockTool.requireInt(c, "z");
+        // ToolArgs accepts {x,y,z} and [x,y,z] alike.
+        world.agentlink.dispatch.ToolArgs.IntPos c =
+                world.agentlink.dispatch.ToolArgs.requireIntPos(args, "center");
+        int cx = c.x();
+        int cy = c.y();
+        int cz = c.z();
         double radius = GetBlockTool.requireDouble(args, "radius");
         if (radius <= 0 || radius > MAX_RADIUS) {
             throw new ToolException("INVALID_ARGS", "radius must be in (0, " + MAX_RADIUS + "]");

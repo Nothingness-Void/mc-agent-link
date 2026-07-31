@@ -38,14 +38,17 @@ public class RaycastTool implements Tool {
     @Override
     public JsonObject invoke(JsonObject args, ClientSession session) throws ToolException {
         ServerLevel level = GetBlockTool.resolveDimension(mc, args);
-        JsonObject originObj = requireObj(args, "origin");
-        JsonObject dirObj = requireObj(args, "direction");
-        double ox = GetBlockTool.requireDouble(originObj, "x");
-        double oy = GetBlockTool.requireDouble(originObj, "y");
-        double oz = GetBlockTool.requireDouble(originObj, "z");
-        double dx = GetBlockTool.requireDouble(dirObj, "x");
-        double dy = GetBlockTool.requireDouble(dirObj, "y");
-        double dz = GetBlockTool.requireDouble(dirObj, "z");
+        // Via ToolArgs so {x,y,z} and [x,y,z] both work, matching every 0.5.0 spatial tool.
+        world.agentlink.dispatch.ToolArgs.DoublePos origin =
+                world.agentlink.dispatch.ToolArgs.requireDoublePos(args, "origin");
+        world.agentlink.dispatch.ToolArgs.DoublePos direction =
+                world.agentlink.dispatch.ToolArgs.requireDoublePos(args, "direction");
+        double ox = origin.x();
+        double oy = origin.y();
+        double oz = origin.z();
+        double dx = direction.x();
+        double dy = direction.y();
+        double dz = direction.z();
         double distance = args.has("max_distance") && !args.get("max_distance").isJsonNull()
                 ? args.get("max_distance").getAsDouble()
                 : 16.0;

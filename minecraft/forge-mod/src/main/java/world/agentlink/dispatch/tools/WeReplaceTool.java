@@ -33,25 +33,30 @@ public class WeReplaceTool implements Tool {
         return "we_replace";
     }
 
+    /** Declare the cuboid so a build zone can exempt this call from the approval prompt. */
+    @Override
+    public void declareScope(JsonObject args) {
+        try {
+            world.agentlink.sandbox.BuildZones.declareScope(args,
+                    world.agentlink.dispatch.ToolArgs.optString(args, "dim", Dimensions.DEFAULT),
+                    world.agentlink.dispatch.ToolArgs.requireBox(args));
+        } catch (ToolException ignored) {
+        }
+    }
+
     @Override
     public JsonObject invoke(JsonObject args, ClientSession session) throws ToolException {
         ServerLevel level = GetBlockTool.resolveDimension(mc, args);
-        JsonObject min = WeSetTool.requireObj(args, "min");
-        JsonObject max = WeSetTool.requireObj(args, "max");
-        int x1 = GetBlockTool.requireInt(min, "x");
-        int y1 = GetBlockTool.requireInt(min, "y");
-        int z1 = GetBlockTool.requireInt(min, "z");
-        int x2 = GetBlockTool.requireInt(max, "x");
-        int y2 = GetBlockTool.requireInt(max, "y");
-        int z2 = GetBlockTool.requireInt(max, "z");
+        // ToolArgs accepts both {x,y,z} and [x,y,z], matching the native write tools.
+        world.agentlink.dispatch.ToolArgs.Box box = world.agentlink.dispatch.ToolArgs.requireBox(args);
+        int x1 = box.minX(), y1 = box.minY(), z1 = box.minZ();
+        int x2 = box.maxX(), y2 = box.maxY(), z2 = box.maxZ();
 
         List<String> from = readStringList(args, "from");
         if (from.isEmpty()) throw new ToolException("INVALID_ARGS", "from must be a non-empty array of block ids");
         String to = RequestDispatcher.requireString(args, "to");
 
-        long volume = (long) (Math.abs(x2 - x1) + 1)
-                * (Math.abs(y2 - y1) + 1)
-                * (Math.abs(z2 - z1) + 1);
+        long volume = box.volume();
         if (volume > MAX_VOLUME) {
             throw new ToolException("INVALID_ARGS",
                     "Region volume " + volume + " exceeds we_replace limit " + MAX_VOLUME);
