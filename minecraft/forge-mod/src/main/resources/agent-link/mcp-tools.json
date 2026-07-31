@@ -535,5 +535,468 @@
       },
       "additionalProperties": false
     }
+  },
+  {
+    "name": "whoami",
+    "description": "Report what YOU are allowed to do on this server: token tier, which tools bypass approval, which need an admin, whether an eligible approver is online right now, file-write globs, build zones, volume limits per tool, and which optional integrations (WorldEdit, spark) are installed. Call this FIRST on an unfamiliar server — it replaces discovering your limits by triggering denials.",
+    "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+  },
+
+  {
+    "name": "start_task",
+    "description": "Run another tool asynchronously; returns a task_id immediately. Use this for any operation that could take more than a few seconds — large fills, big region scans, snapshot restores — so the MCP call cannot time out mid-work. Sliceable tools additionally spread their work across ticks so the server keeps ticking. The wrapped tool still goes through the normal approval check before it is queued, so this is not a way to skip a prompt: a denial is returned here, synchronously.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "tool": { "type": "string", "description": "Name of the tool to run, exactly as in tools/list." },
+        "args": { "type": "object", "description": "Arguments for that tool, same shape as calling it directly." }
+      },
+      "required": ["tool"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "get_task",
+    "description": "Poll one async task. Returns status (pending/running/succeeded/failed/cancelled), progress {done,total,percent,message}, and the full result once finished. Set `wait_ms` to block server-side until it completes instead of polling in a loop — one call with wait_ms:5000 costs far less than ten polls.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "task_id": { "type": "string" },
+        "wait_ms": { "type": "number", "description": "Block up to this many ms waiting for a terminal state (max 30000). Default 0 = return immediately." }
+      },
+      "required": ["task_id"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "cancel_task",
+    "description": "Request cancellation of a running task. Cooperative: it stops at the next slice boundary, and anything already written to the world STAYS written — use undo_blocks to reverse a partial edit.",
+    "inputSchema": {
+      "type": "object",
+      "properties": { "task_id": { "type": "string" } },
+      "required": ["task_id"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "list_tasks",
+    "description": "List tracked async tasks, newest first. Results are omitted to keep the response small — fetch one with get_task.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "status": { "type": "string", "enum": ["pending", "running", "succeeded", "failed", "cancelled"] },
+        "limit": { "type": "number", "description": "Default 20, max 200." }
+      },
+      "additionalProperties": false
+    }
+  },
+
+  {
+    "name": "set_block",
+    "description": "Place ONE block, undoable via undo_blocks. Accepts the full vanilla block grammar including blockstate properties and block-entity NBT, so `minecraft:chest[facing=north]{Items:[{Slot:0b,id:\"minecraft:diamond\",Count:1b}]}` places an oriented, pre-filled chest in one call. Works without WorldEdit.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "pos": { "description": "{x,y,z} or [x,y,z]. Alternatively pass flat x/y/z." },
+        "x": { "type": "integer" },
+        "y": { "type": "integer" },
+        "z": { "type": "integer" },
+        "block": { "type": "string", "description": "e.g. \"stone\", \"oak_stairs[facing=east,half=top]\", \"barrel{Items:[...]}\"" },
+        "dim": { "type": "string", "description": "Default minecraft:overworld." }
+      },
+      "required": ["block"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "fill_blocks",
+    "description": "Fill a cuboid with one block, undoable. The main building primitive; needs no WorldEdit. Volume over 32768 returns VOLUME_TOO_LARGE telling you to re-issue through start_task, which slices the edit across ticks (up to 4,000,000) and reports progress — do NOT pre-split the region yourself.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "min": { "description": "{x,y,z} or [x,y,z]" },
+        "max": { "description": "{x,y,z} or [x,y,z]" },
+        "block": { "type": "string", "description": "Block to place; same grammar as set_block." },
+        "replace": { "description": "Only overwrite positions whose current block matches. A string or array of strings. A bare id (\"oak_log\") matches any blockstate of that block; adding properties (\"oak_log[axis=y]\") matches only those." },
+        "mode": { "type": "string", "enum": ["replace_all", "hollow", "outline"], "description": "replace_all (default) fills everything; hollow fills only the shell and leaves the interior untouched; outline fills the shell and clears the interior to air." },
+        "dim": { "type": "string" }
+      },
+      "required": ["min", "max", "block"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "set_blocks",
+    "description": "Write an arbitrary SET of positions as one undoable operation — for shapes that are not boxes (stairs, spirals, diffs computed from get_blocks_region). Vastly cheaper than one set_block per position. Over 20000 entries, re-issue through start_task. Use the palette form when many positions share few block types: it avoids repeating the block id on every entry, which is what dominates the request size.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "blocks": {
+          "type": "array",
+          "description": "Each entry is {pos, block} or {pos, p} where p indexes `palette`.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "pos": { "description": "{x,y,z} or [x,y,z]" },
+              "block": { "type": "string" },
+              "p": { "type": "integer", "description": "Index into `palette`." }
+            },
+            "required": ["pos"]
+          }
+        },
+        "palette": { "description": "Optional array of block specs referenced by each entry's `p`." },
+        "dim": { "type": "string" }
+      },
+      "required": ["blocks"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "undo_blocks",
+    "description": "Reverse the most recent native block writes (set_block / fill_blocks / set_blocks / restore_block_snapshot). Separate from we_undo, which covers WorldEdit edits only. mode:\"list\" inspects the stack without touching the world — do that first if you are unsure what the last operation was. The stack does NOT survive a server restart.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "mode": { "type": "string", "enum": ["undo", "list"], "description": "Default \"undo\"." },
+        "steps": { "type": "number", "description": "How many operations to reverse (1-32, default 1)." }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "restore_block_snapshot",
+    "description": "Restore a region saved earlier by save_block_snapshot. Undoable. Optional `offset` places the region somewhere other than where it was captured, which makes snapshot+restore a working copy-paste without WorldEdit. Note the snapshot format stores bare block ids, so blockstate properties restore as defaults and block entities are not captured. Volume over 32768 must go through start_task.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Snapshot name; call list_snapshots to see what exists." },
+        "offset": { "description": "{x,y,z} or [x,y,z] shift applied to every position. Default no shift." },
+        "dim": { "type": "string", "description": "Defaults to the dimension recorded in the snapshot." },
+        "skip_air": { "type": "boolean", "description": "Skip air positions, pasting the structure without clearing around it. Default false." }
+      },
+      "required": ["name"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "list_snapshots",
+    "description": "List saved region snapshots with their dimension, bounds, volume and creation time, so you can pick one to restore.",
+    "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+  },
+  {
+    "name": "find_blocks",
+    "description": "Search a region for specific blocks and return only the matching positions plus per-block counts. Use this instead of paging get_blocks_region (capped at 4096 blocks) when you want to LOCATE something — \"where are the chests in this base\" is one call here versus hundreds there. Skips empty chunk sections, so scanning open sky is cheap. Volume over 4,000,000 must go through start_task.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "min": { "description": "{x,y,z} or [x,y,z]" },
+        "max": { "description": "{x,y,z} or [x,y,z]" },
+        "blocks": { "description": "Block id or array of ids to look for. A bare id matches any blockstate of that block." },
+        "limit": { "type": "number", "description": "Max positions returned (default 256, max 4096). Counts are always complete." },
+        "count_only": { "type": "boolean", "description": "Return totals without any positions. Cheapest way to ask \"how much of X is in here\"." },
+        "group_by_block": { "type": "boolean", "description": "Include per-block-id counts. Default true." },
+        "dim": { "type": "string" }
+      },
+      "required": ["min", "max", "blocks"],
+      "additionalProperties": false
+    }
+  },
+
+  {
+    "name": "get_nbt",
+    "description": "Read raw NBT from a block entity, entity, player, or inventory slot — the escape hatch for everything the structured tools do not model (enchantments, villager trades, spawner contents, banner patterns, modded block-entity internals). Returns both `snbt` (canonical, type-exact) and `nbt` (a JSON projection with a __types map so you can tell a byte from an int). Pass `path` to read one subtree instead of the whole blob; that matters for token cost.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "target": { "type": "string", "enum": ["block", "entity", "player", "item"], "description": "Default \"block\"." },
+        "pos": { "description": "target=block: {x,y,z} or [x,y,z]. Flat x/y/z also accepted." },
+        "x": { "type": "integer" },
+        "y": { "type": "integer" },
+        "z": { "type": "integer" },
+        "dim": { "type": "string" },
+        "uuid": { "type": "string", "description": "target=entity: UUID of a loaded entity (list_entities_near finds them)." },
+        "name": { "type": "string", "description": "target=player or item: player name." },
+        "slot": { "type": "integer", "description": "target=item: 0-8 hotbar, 9-35 main, 36-39 armor, 40 offhand." },
+        "path": { "type": "string", "description": "Vanilla NBT path, e.g. \"Items[0].tag.display.Name\" — same grammar as /data get." }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "set_nbt",
+    "description": "Write NBT to a block entity, entity, player, or inventory slot. PREFER `snbt` over `value`: JSON cannot express a byte vs an int, and Count:1 where vanilla wants Count:1b produces an item that silently vanishes. mode:\"merge\" (default) deep-merges and leaves unmentioned keys alone; mode:\"set\" replaces the value at `path` and requires one. Structural keys (UUID, Pos, id) are refused — use teleport or modify_entity for those effects.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "target": { "type": "string", "enum": ["block", "entity", "player", "item"], "description": "Default \"block\"." },
+        "mode": { "type": "string", "enum": ["merge", "set"], "description": "Default \"merge\"." },
+        "snbt": { "type": "string", "description": "Payload in SNBT, e.g. \"{CustomName:'{\\\"text\\\":\\\"Vault\\\"}'}\". Preferred — type-exact." },
+        "value": { "description": "Payload as JSON. Convenience only: integral numbers become ints, fractional become doubles." },
+        "path": { "type": "string", "description": "Target a subtree instead of the root. Required for mode:\"set\"." },
+        "pos": { "description": "target=block: {x,y,z} or [x,y,z]." },
+        "x": { "type": "integer" },
+        "y": { "type": "integer" },
+        "z": { "type": "integer" },
+        "dim": { "type": "string" },
+        "uuid": { "type": "string", "description": "target=entity." },
+        "name": { "type": "string", "description": "target=player or item." },
+        "slot": { "type": "integer", "description": "target=item." }
+      },
+      "additionalProperties": false
+    }
+  },
+
+  {
+    "name": "teleport",
+    "description": "Move a player or entity, including across dimensions. Structured alternative to /tp: no arbitrary-console permission needed, and the result reports both the old and new position. `to_surface` snaps to the highest solid block at that column, which is what you want when you have good X/Z from a map but do not know what Y is standing room.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Player to move." },
+        "uuid": { "type": "string", "description": "Or any loaded entity by UUID." },
+        "to": { "description": "Destination {x,y,z} or [x,y,z]." },
+        "to_player": { "type": "string", "description": "Or teleport to this player's current location." },
+        "to_surface": { "type": "boolean", "description": "Snap Y to the surface at the destination column." },
+        "dim": { "type": "string", "description": "Destination dimension. Default: keep the subject's current one." },
+        "yaw": { "type": "number" },
+        "pitch": { "type": "number" }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "give_item",
+    "description": "Give items to a player. Accepts the full vanilla item grammar, so enchantments and custom names work: \"diamond_pickaxe{Enchantments:[{id:\\\"minecraft:efficiency\\\",lvl:5s}]}\". Reports how many actually fit versus were dropped, instead of silently scattering the remainder like /give does.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "item": { "type": "string", "description": "Item id plus optional NBT." },
+        "count": { "type": "number", "description": "Total items (default 1, max 6912). Split into stacks automatically." },
+        "drop_overflow": { "type": "boolean", "description": "Drop what does not fit at the player's feet. Default true; false leaves it undelivered and says so." }
+      },
+      "required": ["name", "item"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "set_gamemode",
+    "description": "Change a player's game mode. Reports the previous mode so you can restore it afterwards.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "gamemode": { "type": "string", "enum": ["survival", "creative", "adventure", "spectator"] }
+      },
+      "required": ["name", "gamemode"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "apply_effect",
+    "description": "Apply or clear a status effect on a player or mob. Practical use is protecting a subject while you work — night vision and fire resistance for nether builds, slow falling before a long teleport — or clearing a debuff you caused. mode:\"clear\" with no `effect` removes everything.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Player name." },
+        "uuid": { "type": "string", "description": "Or a loaded living entity by UUID." },
+        "mode": { "type": "string", "enum": ["apply", "clear"], "description": "Default \"apply\"." },
+        "effect": { "type": "string", "description": "e.g. minecraft:night_vision. Omit with mode:\"clear\" to remove all." },
+        "seconds": { "type": "number", "description": "Duration (default 30). Ignored for instant effects." },
+        "amplifier": { "type": "number", "description": "0 = level I. Default 0, max 255." },
+        "ambient": { "type": "boolean" },
+        "show_particles": { "type": "boolean", "description": "Default true." },
+        "show_icon": { "type": "boolean", "description": "Default true." }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "spawn_entity",
+    "description": "Spawn entities with optional NBT — decoration (armor stands, item frames), or setting up a scenario. NBT support means a named, equipped, no-AI armor stand is one call rather than spawn-then-patch. Count is capped at 64: a summon loop is the easiest way to wreck a server's entity budget.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "type": { "type": "string", "description": "Entity id, e.g. minecraft:armor_stand. See list_entity_ids." },
+        "pos": { "description": "{x,y,z} or [x,y,z]." },
+        "count": { "type": "number", "description": "Default 1, max 64." },
+        "nbt": { "type": "string", "description": "SNBT applied to each spawned entity." },
+        "custom_name": { "type": "string" },
+        "name_visible": { "type": "boolean" },
+        "no_ai": { "type": "boolean", "description": "Freeze mob AI — for decoration." },
+        "persistent": { "type": "boolean", "description": "Prevent distance-based despawn." },
+        "dim": { "type": "string" }
+      },
+      "required": ["type", "pos"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "remove_entities",
+    "description": "Remove entities — one by UUID, or every match within a radius. The standard fix for lag from dropped items or piled-up mobs. Players are NEVER removed, and there is no flag for it. An unfiltered bulk call DEFAULTS TO A PREVIEW (dry_run) and returns counts by type; review that, then re-issue with dry_run:false. mode \"discard\" removes silently with no drops; \"kill\" runs normal death handling so loot and XP drop.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "uuid": { "type": "string", "description": "Single-entity form." },
+        "center": { "description": "Bulk form: {x,y,z} or [x,y,z]." },
+        "radius": { "type": "number", "description": "Default 16, max 128." },
+        "types": { "description": "Entity ids to match, e.g. [\"item\", \"zombie\"]. Bare names get the minecraft: namespace." },
+        "categories": { "description": "Coarse buckets: item, xp_orb, mob, projectile, other. Same names as list_entities_near." },
+        "mode": { "type": "string", "enum": ["discard", "kill"], "description": "Default \"discard\"." },
+        "dry_run": { "type": "boolean", "description": "Preview only. Defaults to TRUE when no types/categories filter is given." },
+        "limit": { "type": "number", "description": "Cap on removals (max 20000)." },
+        "dim": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "modify_entity",
+    "description": "Change the common, safe attributes of an existing entity with validation, instead of hand-writing NBT tag types. Every field is optional; only what you pass changes, and the result reports before/after for each. Use set_nbt for anything not listed here.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Player name." },
+        "uuid": { "type": "string", "description": "Or a loaded entity by UUID." },
+        "custom_name": { "type": "string", "description": "Empty string clears it." },
+        "name_visible": { "type": "boolean" },
+        "silent": { "type": "boolean" },
+        "invulnerable": { "type": "boolean" },
+        "glowing": { "type": "boolean" },
+        "no_gravity": { "type": "boolean" },
+        "fire_seconds": { "type": "number", "description": "0 extinguishes." },
+        "health": { "type": "number", "description": "Living entities only; must be > 0 and <= max health." },
+        "no_ai": { "type": "boolean", "description": "Mobs only." },
+        "persistent": { "type": "boolean", "description": "Mobs only; can only be turned on." }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "set_world_property",
+    "description": "Set time, weather, difficulty, or a gamerule — the write side of get_world_info, which could previously only report them. Gamerule names and value types are validated against the real registry, so a typo is an error here rather than a silently ignored command.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "property": { "type": "string", "enum": ["time", "weather", "difficulty", "gamerule"] },
+        "value": { "description": "time: tick count, or a preset (day/noon/sunset/night/midnight/sunrise). weather: clear/rain/thunder. difficulty: peaceful/easy/normal/hard. gamerule: the new value as a string." },
+        "rule": { "type": "string", "description": "property=gamerule: the rule id, e.g. doDaylightCycle. get_world_info lists them all with current values." },
+        "seconds": { "type": "number", "description": "property=weather: how long it lasts. Default 300." },
+        "add": { "type": "boolean", "description": "property=time: add to the current time instead of setting it." },
+        "all_dimensions": { "type": "boolean", "description": "property=time: apply to every dimension. Default true." },
+        "dim": { "type": "string" }
+      },
+      "required": ["property"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "force_load_chunks",
+    "description": "Force-load, release, or list force-loaded chunks. Most world tools silently need the target chunk loaded — reads return \"not found\" and writes can be discarded otherwise — so force-load your working area before editing coordinates nobody is standing near. IMPORTANT: force-loaded chunks tick forever and persist across restarts, so release them (mode:\"remove\" or \"clear\") when finished. Capped at 1024 chunks per call.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "mode": { "type": "string", "enum": ["add", "remove", "list", "clear"], "description": "Default \"add\". \"clear\" releases every force-loaded chunk in the dimension." },
+        "min": { "description": "Block region form: {x,y,z} or [x,y,z]." },
+        "max": { "description": "Block region form." },
+        "chunk": { "type": "object", "description": "Chunk-coordinate form: {x,z}.", "properties": { "x": { "type": "integer" }, "z": { "type": "integer" } } },
+        "chunk_radius": { "type": "number", "description": "With `chunk`: radius in chunks (0-16). Default 0." },
+        "dim": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "save_world",
+    "description": "Flush the world to disk. Call this after a large build or repair so the change is durable instead of living in memory until the next autosave — otherwise a crash makes your \"done\" report false. Runs on the server thread, so do not call it in a loop.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "flush": { "type": "boolean", "description": "Wait for chunk writes to actually land. Default true." }
+      },
+      "additionalProperties": false
+    }
+  },
+
+  {
+    "name": "we_status",
+    "description": "Report whether WorldEdit or FAWE is installed, its version, and the current agent undo depth. Call this before any we_* tool — they are disabled with a clear error when WorldEdit is absent. The native set_block / fill_blocks / set_blocks tools always work and need no WorldEdit.",
+    "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+  },
+  {
+    "name": "we_set",
+    "description": "Fill a cuboid via WorldEdit (volume <= 200000), reversible with we_undo. Faster than fill_blocks on very large selections and dispatched asynchronously when FAWE is present. Requires WorldEdit; use fill_blocks otherwise.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "min": { "type": "object", "properties": { "x": {"type": "integer"}, "y": {"type": "integer"}, "z": {"type": "integer"} }, "required": ["x","y","z"] },
+        "max": { "type": "object", "properties": { "x": {"type": "integer"}, "y": {"type": "integer"}, "z": {"type": "integer"} }, "required": ["x","y","z"] },
+        "block": { "type": "string" },
+        "dim": { "type": "string" }
+      },
+      "required": ["min", "max", "block"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "we_replace",
+    "description": "Replace matching blocks inside a cuboid via WorldEdit, reversible with we_undo. Requires WorldEdit; fill_blocks with `replace` is the native equivalent.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "min": { "type": "object", "properties": { "x": {"type": "integer"}, "y": {"type": "integer"}, "z": {"type": "integer"} }, "required": ["x","y","z"] },
+        "max": { "type": "object", "properties": { "x": {"type": "integer"}, "y": {"type": "integer"}, "z": {"type": "integer"} }, "required": ["x","y","z"] },
+        "from": { "description": "Block id or array of ids to match." },
+        "to": { "type": "string", "description": "Replacement block." },
+        "dim": { "type": "string" }
+      },
+      "required": ["min", "max", "from", "to"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "we_sphere",
+    "description": "Generate a sphere via WorldEdit, reversible with we_undo. There is no native equivalent — use this for round shapes, or compute the positions yourself and pass them to set_blocks.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "center": { "type": "object", "properties": { "x": {"type": "integer"}, "y": {"type": "integer"}, "z": {"type": "integer"} }, "required": ["x","y","z"] },
+        "radius": { "type": "number", "description": "Max 50." },
+        "block": { "type": "string" },
+        "hollow": { "type": "boolean", "description": "Shell only." },
+        "dim": { "type": "string" }
+      },
+      "required": ["center", "radius", "block"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "we_cyl",
+    "description": "Generate a bottom-centered cylinder via WorldEdit, reversible with we_undo.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "center": { "type": "object", "properties": { "x": {"type": "integer"}, "y": {"type": "integer"}, "z": {"type": "integer"} }, "required": ["x","y","z"] },
+        "radius": { "type": "number", "description": "Max 50." },
+        "height": { "type": "number", "description": "Max 256." },
+        "block": { "type": "string" },
+        "hollow": { "type": "boolean" },
+        "dim": { "type": "string" }
+      },
+      "required": ["center", "radius", "block"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "we_undo",
+    "description": "Reverse the last N WorldEdit operations this agent performed. Covers we_* tools ONLY — native writes (set_block, fill_blocks, set_blocks, restore_block_snapshot) live on a separate stack reversed by undo_blocks.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "steps": { "type": "number", "description": "1-10, default 1." },
+        "dim": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
   }
 ]
