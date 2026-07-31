@@ -15,11 +15,29 @@ public abstract class BaseAddonTool implements Tool {
     private final String name;
     private final String description;
     private final JsonObject inputSchema;
+    private final boolean offThread;
 
     protected BaseAddonTool(String name, String description, JsonObject inputSchema) {
+        this(name, description, inputSchema, false);
+    }
+
+    /**
+     * @param offThread when true the dispatcher runs this tool on a worker thread instead of the
+     *     server thread. Opt in only if the tool avoids world state entirely (HTTP calls, file I/O,
+     *     database queries) or hops back on-thread itself via
+     *     {@code world.agentlink.dispatch.ServerThread.call}. Reading blocks or entities off-thread
+     *     is not safe. The payoff is that a tool blocking for seconds no longer stalls ticks.
+     */
+    protected BaseAddonTool(String name, String description, JsonObject inputSchema, boolean offThread) {
         this.name = name;
         this.description = description == null ? "" : description;
         this.inputSchema = inputSchema;
+        this.offThread = offThread;
+    }
+
+    @Override
+    public final boolean offThread() {
+        return offThread;
     }
 
     @Override

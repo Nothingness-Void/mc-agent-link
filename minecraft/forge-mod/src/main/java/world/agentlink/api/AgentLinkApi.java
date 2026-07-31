@@ -99,6 +99,29 @@ public final class AgentLinkApi {
         return snap == null ? null : new ConfigView(snap);
     }
 
+    // ---------- Build zones ----------
+
+    /**
+     * True when {@code (x, y, z)} in {@code dimension} falls inside an operator-declared build zone.
+     *
+     * <p>Exposed for addons that do their own world writing: an addon can use this to mirror the base
+     * mod's geometric permission model instead of inventing a second one the operator has to
+     * configure separately. Returns false when no zones are configured — the safe default, matching
+     * how the base mod treats an undeclared footprint as unbounded.
+     *
+     * <p>Note this reports containment only. It does not perform an approval check; an addon tool
+     * still goes through the ordinary approval pipeline, and only tools the base mod recognizes as
+     * spatial are eligible for the geometric exemption.
+     */
+    public static boolean isInBuildZone(String dimension, int x, int y, int z) {
+        return world.agentlink.sandbox.BuildZones.findPoint(dimension, x, y, z) != null;
+    }
+
+    /** Whether the operator configured any build zones at all. */
+    public static boolean buildZonesConfigured() {
+        return world.agentlink.sandbox.BuildZones.anyConfigured();
+    }
+
     /** Stable subset of the internal {@code AgentLinkConfig.Snapshot}. */
     public static final class ConfigView {
         private final AgentLinkConfig.Snapshot snap;
