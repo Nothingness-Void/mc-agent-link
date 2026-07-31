@@ -115,23 +115,47 @@ write_deny = []
 [approval]
 enabled = true
 timeout_seconds = 60
+table_version = 1             # 审批表迁移代数,mod 自己维护,别手改
 auto_allow_tools = [
   "ping", "agent_heartbeat", "get_agent_requests", "update_agent_request_status", "reply_agent_request",
   "list_online_players", "get_player_info", "list_mods", "get_server_stats",
   "get_recent_events", "get_recent_logs", "subscribe_events", "unsubscribe_events",
-  "tick_profile", "thread_dump", "spark_status", "spark_stats", "spark_health_report"
+  "tick_profile", "thread_dump", "spark_status", "spark_stats", "spark_health_report",
+  # 0.5.0 只读新增
+  "whoami", "find_blocks", "get_nbt", "list_snapshots",
+  # 异步任务簿记(start_task 会对被包装的工具单独走一遍审批)
+  "start_task", "get_task", "cancel_task", "list_tasks"
 ]
 trusted_tools = []
 admin_only_tools = [
   "run_console_command", "write_config_file", "broadcast",
   "spark_profiler_start", "spark_profiler_stop", "spark_profiler_cancel",
-  "read_server_file", "list_dir"
+  "read_server_file", "list_dir", "get_container",
+  "we_set", "we_replace", "we_sphere", "we_cyl", "we_undo",
+  # 0.5.0 写入类
+  "set_block", "set_blocks", "fill_blocks", "undo_blocks", "restore_block_snapshot", "set_nbt",
+  "teleport", "give_item", "set_gamemode", "apply_effect",
+  "spawn_entity", "remove_entities", "modify_entity",
+  "set_world_property", "force_load_chunks", "save_world"
 ]
+
+# 建造白名单(0.5.0)。空列表 = 每次空间写入都弹审批,和 0.4.x 一致。
+# footprint 完整落在某个区域内的空间写入免审批;跨界的照旧弹窗,绝不静默裁剪。
+build_zones = []
+
+[tasks]
+max_concurrent = 2            # 同时运行的异步任务数(最大 8)
+blocks_per_tick = 8000        # 分片写入的每 tick 预算,越低越不影响 TPS
+
+[events]
+verbose_topics = []           # 可选:"block_place" "block_break" "item_pickup" "item_drop"
 
 [roles]
 admin_uuids = []
 guest_uuids = []
 ```
+
+> **升级说明**:`auto_allow_tools` / `admin_only_tools` 写在 toml 里,升级时以文件为准。所以 mod 会按 `approval.table_version` 把新版本引入的工具**增量合并**进这两张表 —— 否则新的只读工具会变成"要 OP 点一下",新的写入工具会变成"任何 OP 都能批"而不是"只有 admin 能批"。你手动删掉的条目不会被加回来。
 
 > **安全提示**:这个 token 等同于服务端 op 权限。如果用户在公开聊天里发,告诉他重新生成(把 toml 里 token 字段清空,重启服务器,会重新生成)。
 
@@ -143,11 +167,34 @@ mc-agent-link 会在 Minecraft 聊天里弹出 MCP 工具审批按钮。为了�
 
 - `approval.auto_allow_tools`：直接放行,不弹按钮
 - `approval.trusted_tools`：点过 `[始终允许该工具]` 后免重复审批
+- `build_zones`：空间写入的 footprint 完整落在某个区域内时免审批(见下)
 - 普通工具：默认所有在线 OP 都能看到按钮,也都能执行 `/agentlink approve|deny|trust <id>`
 - `approval.admin_only_tools`：只有 `[roles].admin_uuids` 里的玩家能批准
 - 如果 `roles.admin_uuids = []`：回退到所有在线 OP,保持老服务器/未配角色服务器可用
 
 高风险工具仍不能被永久信任,只能逐次允许。
+
+### 可选:用 build_zones 划出 agent 的施工区
+
+0.5.0 之前每个空间写入都在 `admin_only_tools` 里,一次建造就是几百次点击 —— 点到这个量级,审批就不再是判断,而是机械动作。反过来把 `fill_blocks` 整个信任掉,agent 就能推平主城。
+
+所以边界按**几何**划,而不是按调用次数:
+
+```toml
+build_zones = [
+  {label = "agent plot", dim = "minecraft:overworld", min = [300, -64, 300], max = [340, 320, 340]}
+]
+```
+
+规则:
+
+- 只有当这次调用影响的**整个**区域落在某一个区域内,才免审批。跨界的照旧弹窗 —— **不会**被裁剪成"只改区域内那部分",因为做一件和用户要求不同的事比多问一次更糟。
+- 覆盖 `set_block` `set_blocks` `fill_blocks` `restore_block_snapshot` `we_set` `we_replace` `we_sphere` `we_cyl` `spawn_entity`。
+- **不**覆盖 `run_console_command`(命令字符串我们没解析,推断不出它会碰哪里,硬猜就是假保证)、`write_config_file`、`set_nbt`,以及任何非空间工具。
+- 默认空列表。不配就是 0.4.x 的行为。
+- 命中时审计日志记 `outcome: build_zone`。
+
+告诉用户:先给一小块地,确认 agent 干活的方式没问题再放宽。
 
 ### 可选:配置 admin 名单
 

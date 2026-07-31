@@ -42,9 +42,15 @@ After the MCP host is connected, tool execution may still require in-game approv
 
 - `approval.auto_allow_tools`: run immediately without a prompt
 - `approval.trusted_tools`: remembered from the in-game `[always allow this tool]` button
+- `build_zones`: a spatial write whose **entire** affected region lies inside an operator-declared box runs without a prompt. An edit straddling the boundary still prompts and is never clipped to fit.
 - ordinary approval: online OPs see clickable approval buttons in Minecraft chat
 - `approval.admin_only_tools`: only players listed in `[roles].admin_uuids` may approve
 - if `roles.admin_uuids` is empty: the server falls back to all online OPs so legacy servers still work
+
+Once connected, call `whoami` before anything else. It reports which of the above applies to your
+token, whether an eligible approver is even online, and your write boundaries — which distinguishes
+"not permitted" from "nobody online to permit it". Those need completely different explanations to
+the user.
 
 If the MCP host (for example Claude Code) shows its own permission prompt first, allow the `minecraft` MCP server/tool there so the request can reach the Minecraft-side approval flow.
 
@@ -73,7 +79,22 @@ Always read and merge existing config files; never overwrite unrelated MCP serve
 
 ## Safety
 
-The token grants Minecraft server operator-level actions through tools like `run_console_command`. Do not run destructive commands such as `stop`, `/op`, `/deop`, `/ban`, `/fill`, or `/kill @e` without explicit user confirmation.
+The token grants Minecraft server operator-level actions. Do not run destructive commands such as
+`stop`, `/op`, `/deop`, `/ban`, `/fill`, or `/kill @e` without explicit user confirmation.
+
+Prefer a structured tool over `run_console_command` where one exists (`set_block`, `fill_blocks`,
+`teleport`, `give_item`, `set_world_property`, `remove_entities`, …). The console tool is an
+op-level-4 shell: approving it grants everything, its output has to be parsed out of chat text, and
+nothing it does is undoable. The structured tools take typed arguments, need a narrower permission,
+return parseable results, and block writes are reversible with `undo_blocks`.
+
+Two behaviours to know before you write anything:
+
+- Long operations must go through `start_task`, or the MCP call times out mid-work while the work
+  keeps running. Exceeding a synchronous limit returns `VOLUME_TOO_LARGE` **with the exact
+  `start_task` call to use** — don't split the region yourself.
+- `remove_entities` without a `types`/`categories` filter defaults to a preview. Read
+  `counts_by_type`, confirm, then re-issue with `dry_run:false`. It never removes players.
 
 If a tool call returns `APPROVAL_DENIED`, explain that the in-game OP/admin denied it, no eligible approver was online, or the request timed out.
 

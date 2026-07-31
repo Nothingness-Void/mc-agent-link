@@ -1,8 +1,17 @@
 # MCP Tools reference
 
-This page lists every MCP tool registered by `mc-agent-link` (base mod) at startup and what each one does. Versions covered: **0.4.0-alpha** (base + `mc-agent-link-agent` addon — version numbers unified starting this release).
+This page lists every MCP tool registered by `mc-agent-link` (base mod) at startup and what each one does. Versions covered: **0.5.0-alpha** (base + `mc-agent-link-agent` addon — version numbers unified since 0.4.0).
 
 > Tools that an addon adds via `AgentLinkApi.registerTool(modId, tool)` get a `<modid>__` prefix and appear in MCP `tools/list` automatically; this page only documents the base mod set.
+
+## Start here: `whoami`
+
+Before doing anything on an unfamiliar server, call `whoami`. It returns the caller's token tier,
+the full auto-allow / admin-only / trusted lists, whether an eligible approver is currently online,
+the file-write globs, the configured build zones, the per-tool volume limits, and which optional
+integrations are installed. That replaces discovering the boundaries by triggering denials — and it
+distinguishes "this token can never do that" from "no OP is online to approve it", which produce very
+different advice to the user.
 
 ## Approval tiers (config in `config/agent-link.toml`)
 
@@ -22,6 +31,35 @@ Two independent dimensions decide whether a tool call goes through in-game appro
 | 4 · admin-only | requires button **and** OP must be in `[roles].admin_uuids` | only configured admins | mutating / sensitive tools (see `approval.admin_only_tools`) |
 
 A non-OP player cannot approve anything. The `/agentlink` command tree itself requires `hasPermission(2)`.
+
+### Build zones — the geometric exemption (0.5.0)
+
+Tier 4 alone made building unworkable: every `fill_blocks` call needed a click, a build is hundreds of
+calls, and an operator clicking "allow" that many times is not exercising judgment. Blanket-trusting
+the tool is the opposite failure — the agent could then flatten spawn.
+
+`build_zones` bounds the permission spatially instead of per-call:
+
+```toml
+[[build_zones]]
+  label = "agent plot"
+  dim = "minecraft:overworld"
+  min = [100, -64, 100]
+  max = [200, 320, 200]
+```
+
+A mutating spatial call is exempted only when its **entire** affected region fits inside one zone.
+An edit straddling a boundary still prompts — it is never silently clipped to fit, because doing
+something other than what was asked is worse than asking.
+
+Applies to `set_block`, `set_blocks`, `fill_blocks`, `restore_block_snapshot`, `we_set`, `we_replace`,
+`we_sphere`, `we_cyl`, `spawn_entity`. It deliberately does **not** exempt `run_console_command`
+(a command's footprint cannot be inferred from text we did not parse), `write_config_file`, `set_nbt`,
+or anything non-spatial. Empty by default, so 0.4.x behaviour is unchanged until an operator opts in.
+
+Tools declare their footprint via `Tool.declareScope`, which the dispatcher calls on the transport
+thread before the approval decision. A tool that does not override it is never exempted — an
+undeclared footprint is treated as unbounded.
 
 ---
 
@@ -63,9 +101,35 @@ A non-OP player cannot approve anything. The `/agentlink` command tree itself re
 | `get_server_stats` | none | `{ tps, mspt, mem_used_mb, mem_max_mb, loaded_chunks, online, max_players }` |
 | `tick_profile` | none | rolling 100-tick distribution (avg/max/p50/p95/p99 mspt) |
 | `thread_dump` | none | server thread dump |
-| `get_recent_events` | `{ since_seq?, topics?, limit? }` | event-bus tail |
+| `get_recent_events` | `{ since_seq?, topics?, limit? }` | event-bus tail — see the topic list below |
 | `get_recent_logs` | `{ since_seq?, level?, limit? }` | server log tail |
 | `subscribe_events` / `unsubscribe_events` | `{ topics }` | per-WebSocket subscription (no-op on stateless MCP HTTP) |
+
+### Event topics
+
+0.4.x recorded four topics. That is enough to know who is around and not enough to know what happened:
+"who griefed spawn" and "why did the shop chest empty" had no answer, because the events that would say
+so were never recorded.
+
+| Topic | Since | Notes |
+|---|---|---|
+| `chat` / `player_join` / `player_leave` / `player_death` | 0.1 | `player_death` now also carries the rendered `death_message` and the killer's type/UUID |
+| `command` | 0.5.0 | The highest-value audit topic — "who ran `/gamemode creative`" is the first question in most incident reports |
+| `container_open` | 0.5.0 | Player, position, and menu type |
+| `entity_death` | 0.5.0 | Non-player deaths, **only when a player caused them** — otherwise every zombie burning at dawn floods the buffer |
+| `player_respawn` / `dimension_change` / `player_hurt` | 0.5.0 | `player_hurt` filters out sub-1.0 chip damage |
+| `advancement` | 0.5.0 | Recipe unlocks excluded; they fire constantly and are not progression signals |
+| `explosion` | 0.5.0 | Epicenter, blocks destroyed, entities affected, and the indirect cause (the player who lit it) |
+| `server` | 0.5.0 | agent-link's own notes, including throttle warnings |
+| `block_place` / `block_break` / `item_pickup` / `item_drop` | 0.5.0, **opt-in** | Usually what an investigation wants, and also what one player with an efficiency-V pickaxe emits hundreds of per minute |
+
+The verbose four are gated behind `events.verbose_topics` in the config. Recording them
+unconditionally would push everything else out of the ring buffer within a minute, which defeats the
+"what happened a few minutes ago" use case the pull model exists for. Even when enabled, each player is
+capped at 40 verbose events per 10 s window, and a drop emits one note on the `server` topic — so an
+agent knows counts are incomplete rather than assuming nothing happened.
+
+The ring buffer grew from 1024 to 4096 entries to accommodate the wider topic set.
 
 ## Mod inventory (auto-allowed)
 
@@ -129,6 +193,115 @@ Each successful mutating op pushes its `EditSession` onto a shared agent undo st
 | `we_cyl` | 4 | `{ center, radius (≤50), height (≤256), block, hollow?, dim? }` | bottom-centered cylinder via WE `makeCylinder` |
 | `we_undo` | 4 | `{ steps? (1-10), dim? }` | pops the most recent N edit sessions and reverses them |
 
+WorldEdit and the native writers keep **separate undo stacks**. `we_undo` reverses `we_*` edits;
+`undo_blocks` reverses `set_block` / `fill_blocks` / `set_blocks` / `restore_block_snapshot`. Merging
+them would make "undo the last thing" ambiguous about which subsystem it belonged to.
+
+---
+
+## Self-introspection (0.5.0, auto-allowed)
+
+| Tool | Args | Returns |
+|---|---|---|
+| `whoami` | none | `caller` (token tier, transport, whether approval is bypassed), `approval` (all four tier lists, admin config, online OPs/admins, eligible approvers, and a `warning` when a GUEST token has nobody who could approve), `writes` (file globs, build zones, native undo depth), `limits` (per-tool sync/task volume caps, task settings), `integrations` (WorldEdit impl + version, spark), `runtime` (task count, audit state, registered addon tools) |
+
+## Async tasks (0.5.0, auto-allowed)
+
+The problem: MCP is request/response and every layer in between has a timeout — the MCP host, the HTTP
+client, an in-game bridge. A three-minute build trips one of them, and when the client gives up the
+work keeps running with nobody reading the result. Wrapping the call in a task inverts that.
+
+| Tool | Args | Returns |
+|---|---|---|
+| `start_task` | `{ tool, args? }` | `{ task_id, status, sliceable, estimated_units?, approval_outcome?, poll_with }` |
+| `get_task` | `{ task_id, wait_ms? (≤30000) }` | full record: `status`, `progress{done,total,fraction,percent,message}`, `partial?`, `result?`, `error?`, `terminal` |
+| `cancel_task` | `{ task_id }` | the record plus `cancelled` and a note about partial writes |
+| `list_tasks` | `{ status?, limit? (default 20, max 200) }` | newest-first summaries; results omitted to keep the listing small |
+
+Two properties worth stating plainly:
+
+- **Approval is not laundered.** `start_task` runs the wrapped tool through the ordinary approval
+  pipeline *before* queueing it, and returns `APPROVAL_DENIED` synchronously if the answer is no.
+  Otherwise it would be a universal bypass: wrap `run_console_command`, skip the prompt.
+- **Sliceable vs not.** Tools implementing `TaskContext.Sliceable` (`fill_blocks`, `set_blocks`,
+  `find_blocks`, `restore_block_snapshot`) hop on-thread per slice at `tasks.blocks_per_tick`, so ticks
+  keep flowing and progress is reported. Anything else runs as one on-thread unit — the MCP call still
+  returns immediately, but tick time is not protected, and the response says so.
+
+Task records are mirrored to `config/agent-link/tasks/<id>.json`. They are deliberately **not** resumed
+after a restart: replaying a half-finished edit against a world that may have changed offline is more
+dangerous than losing the task.
+
+## Native block writing (0.5.0)
+
+Works without WorldEdit. Before this, every mutating capability was either `run_console_command
+"/setblock ..."` (no undo, one block per console call, output to parse, and an arbitrary-console
+approval) or required WorldEdit to be installed.
+
+| Tool | Tier | Args | Notes |
+|---|---|---|---|
+| `set_block` | 4 † | `{ pos \| x,y,z, block, dim? }` | Full vanilla block grammar including properties and block-entity NBT, so `chest[facing=north]{Items:[…]}` places an oriented, pre-filled chest in one call. Returns `previous_block`. |
+| `fill_blocks` | 4 † | `{ min, max, block, replace?, mode?, dim? }` | `mode`: `replace_all` (default) / `hollow` (shell only) / `outline` (shell + interior cleared to air). `replace` takes one id or a list; a bare id matches any blockstate, adding properties narrows it. Sync ≤ 32 768; via `start_task` ≤ 4 000 000. |
+| `set_blocks` | 4 † | `{ blocks[], palette?, dim? }` | Arbitrary position sets — for anything that is not a box. Each entry is `{pos, block}` or `{pos, p}` indexing `palette`. The palette form exists because repeating the block id on every entry dominates the request body, which the agent pays for in tokens. Sync ≤ 20 000; via task ≤ 1 000 000. |
+| `undo_blocks` | 4 | `{ mode? ("undo"/"list"), steps? (1-32) }` | Reverses native writes. `mode:"list"` inspects the stack without touching the world. In-memory only: does not survive a restart. |
+| `restore_block_snapshot` | 4 † | `{ name, offset?, dim?, skip_air? }` | Closes the loop `save_block_snapshot` opened in 0.2.4. With `offset` it is a working copy-paste. Caveat surfaced in the response: the snapshot format stores bare block ids, so properties restore as defaults and block entities are not captured. |
+| `list_snapshots` | 1 | none | Names, dimension, bounds, volume, creation time. |
+| `find_blocks` | 1 | `{ min, max, blocks, limit?, count_only?, group_by_block?, dim? }` | Scans server-side and returns only hits plus `counts_by_block`. "Where are the chests in this base" is one call here versus ~1200 paged `get_blocks_region` calls and client-side RLE decoding. Sync ≤ 4 000 000; via task ≤ 64 000 000. |
+
+† Exempt from the prompt when the whole footprint sits inside a `build_zones` region.
+
+Every native write records the prior `BlockState` (plus block-entity NBT) for each position it actually
+changed, and pushes the batch as **one** undo entry. Identical states are skipped rather than
+rewritten, which keeps the snapshot honest and avoids pointless chunk dirtying. Bulk fills defer
+neighbour updates to a single pass at the end — sending one per block is what makes naive `/setblock`
+loops melt a server.
+
+## NBT read/write (0.5.0)
+
+The general escape hatch. The structured readers each expose a hand-picked projection —
+`get_container` gives item ids and counts, `get_player_info` gives vitals — which covers common
+questions and nothing else. Enchantments, villager trades, spawner contents, banner patterns, and every
+modded block entity's internals were simply unreachable.
+
+| Tool | Tier | Args | Notes |
+|---|---|---|---|
+| `get_nbt` | 1 | `{ target? ("block"/"entity"/"player"/"item"), pos \| x,y,z, uuid?, name?, slot?, path?, dim? }` | Returns both `snbt` (canonical, lossless) and `nbt` (JSON projection with a `__types` sibling map so a byte is distinguishable from an int). `path` uses vanilla's own NBT-path grammar. |
+| `set_nbt` | 4 | `{ target?, mode? ("merge"/"set"), snbt \| value, path?, … }` | `merge` (default) deep-merges and leaves unmentioned keys alone; `set` replaces the value at `path` and requires one. |
+
+Two design points:
+
+- **Prefer `snbt` for writes.** JSON cannot express a byte versus an int, and `Count:1` where vanilla
+  expects `Count:1b` yields an item that silently vanishes. The JSON `value` path is accepted for
+  convenience (integral → int, fractional → double) and the round-trip of our own output is faithful
+  because `__types` is honoured, but the lossless path is the documented one.
+- **Structural keys are refused.** `UUID`, `id`, `Pos`, `Dimension`, `Passengers`, `RootVehicle` on
+  entities; `x`/`y`/`z`/`id` on block entities. Rewriting those doesn't edit an object, it produces a
+  broken one that may fail on the next save — and the right tools for those effects (`teleport`,
+  `modify_entity`) exist alongside.
+- Lists are **replaced**, not merged element-wise. Index 0 of an inventory is not "the same object" as
+  index 0 of the payload, so replacement is the honest behaviour; use a targeted `path` to edit one
+  element.
+
+## Player / entity / world control (0.5.0)
+
+All of these were previously reachable only by asking for arbitrary-console permission and parsing chat
+output. Each one here takes typed arguments, validates them, and returns a structured before/after.
+
+| Tool | Tier | Args | Notes |
+|---|---|---|---|
+| `teleport` | 4 | `{ name \| uuid, to \| to_player, to_surface?, dim?, yaw?, pitch? }` | Handles cross-dimension moves without the `/execute in <dim> run tp` dance. `to_surface` snaps Y to the highest solid block — useful when the agent has good X/Z from a map and no idea what Y is standing room. Rejects a Y far outside the build range, which would otherwise be a slow void death rather than an error. |
+| `give_item` | 4 | `{ name, item, count?, drop_overflow? }` | Full vanilla item grammar, so enchantments and custom names work. Reports `added_to_inventory` / `dropped_on_ground` / `not_delivered` instead of silently scattering the remainder like `/give`. |
+| `set_gamemode` | 4 | `{ name, gamemode }` | Returns `previous_gamemode` so the agent can restore it. |
+| `apply_effect` | 4 | `{ name \| uuid, mode?, effect?, seconds?, amplifier?, ambient?, show_particles?, show_icon? }` | Protecting a subject while working (night vision + fire resistance in the nether, slow falling before a teleport) or clearing a debuff the agent caused. `mode:"clear"` with no `effect` removes everything. Instant effects ignore duration and say so. |
+| `spawn_entity` | 4 † | `{ type, pos, count?, nbt?, custom_name?, name_visible?, no_ai?, persistent?, dim? }` | NBT support means a named, equipped, no-AI armour stand is one call rather than spawn-then-patch. Count capped at 64; `minecraft:player` refused. |
+| `remove_entities` | 4 | `{ uuid \| center + radius, types?, categories?, mode?, dry_run?, limit?, dim? }` | The standard fix for lag from dropped items or piled-up mobs. **Players are never removed** and there is no flag for it. An unfiltered bulk call defaults to a preview returning `counts_by_type`. `discard` removes silently with no drops; `kill` runs normal death handling. Radius capped at 128 — there is no "everything, everywhere" mode. |
+| `modify_entity` | 4 | `{ name \| uuid, custom_name?, name_visible?, silent?, invulnerable?, glowing?, no_gravity?, fire_seconds?, health?, no_ai?, persistent? }` | Validated alternative to hand-writing NBT tag types for the handful of things actually asked for. Every field optional; reports before/after per field. `set_nbt` remains the escape hatch. |
+| `set_world_property` | 4 | `{ property: "time"/"weather"/"difficulty"/"gamerule", value, rule?, seconds?, add?, all_dimensions?, dim? }` | The write side of `get_world_info`, which could previously only report these. Gamerule names and value types are checked against the real registry, so a typo or a boolean in an integer rule is an error here rather than a silently ignored command. |
+| `force_load_chunks` | 4 | `{ mode? ("add"/"remove"/"list"/"clear"), min+max \| chunk+chunk_radius, dim? }` | Almost every world tool silently depends on the chunk being loaded; without this, reads return "not found" and writes can be discarded when the chunk generates later. Capped at 1024 chunks/call, and the response reminds the caller that forced chunks tick forever and persist across restarts. |
+| `save_world` | 4 | `{ flush? }` | Makes a checkpoint explicit after a large build, so a crash cannot falsify a "done" report. Deliberately narrow — it does not stop the server or toggle autosave. Warns when the save took long enough that players felt it. |
+
+† Exempt from the prompt when inside a `build_zones` region.
+
 ---
 
 ## Operator commands
@@ -160,7 +333,21 @@ When `audit.enabled = true` (default), every MCP tool invocation appends a singl
 {"ts":"2026-05-26T18:33:00Z","tool":"run_console_command","outcome":"approved","actor":"void","actor_uuid":"...","reason":"approved by void","result_ok":true,"args_json":"{\"command\":{\"redacted\":true,\"length\":18}}"}
 ```
 
-Sensitive fields are redacted via `audit.redact_args` (`tool.argkey` format). Defaults: `run_console_command.command`, `write_config_file.content`, `write_config_file.base64`, `read_config.content`. Extend the list for any addon tool whose arg or returned content is sensitive.
+Sensitive fields are redacted via `audit.redact_args` (`tool.argkey` format). Defaults: `run_console_command.command`, `write_config_file.content`, `write_config_file.base64`, `read_config.content`, `set_nbt.snbt`, `set_nbt.value`. Extend the list for any addon tool whose arg or returned content is sensitive.
+
+The `outcome` field gained `build_zone` in 0.5.0, alongside the existing `auto_allow` / `trusted` /
+`console_trusted` / `approved` / `denied` / `timed_out`. The `tier` field is now recorded correctly for
+every call — before 0.5.0 it was captured after the dispatcher's thread hop, so it always read `guest`
+regardless of which token was used.
+
+## New config keys in 0.5.0
+
+| Key | Default | Purpose |
+|---|---|---|
+| `build_zones` | `[]` | Array of `{label, dim, min, max}` tables. Regions where spatial writes skip approval. Empty = 0.4.x behaviour. |
+| `tasks.max_concurrent` | `2` | How many async tasks run at once (max 8). More concurrency means more work competing for the same per-tick budget. |
+| `tasks.blocks_per_tick` | `8000` | Per-tick block budget for a sliced edit (64..200000). Lower is gentler on TPS and slower. |
+| `events.verbose_topics` | `[]` | Which high-frequency topics to record: `block_place`, `block_break`, `item_pickup`, `item_drop`. |
 
 ## Adding a tool from your own mod
 

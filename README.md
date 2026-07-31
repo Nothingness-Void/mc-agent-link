@@ -2,7 +2,7 @@
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
-让 AI agent(通过 [Model Context Protocol](https://modelcontextprotocol.io))接管你的 Minecraft 服务器。跑命令、查玩家、读日志、看 crash 报告、profile 卡顿、调 mod 配置 —— **op 在控制台能干的事,agent 都能干**。
+让 AI agent(通过 [Model Context Protocol](https://modelcontextprotocol.io))接管你的 Minecraft 服务器。跑命令、查玩家、读日志、看 crash 报告、profile 卡顿、调 mod 配置,以及**原生方块写入、NBT 读写、玩家/实体/世界控制、异步长任务** —— op 在控制台能干的事 agent 都能干,而且大部分不用再走 `run_console_command`。
 
 > **状态**:早期。先支持 Forge 1.20.1 服务端,NeoForge / Fabric / Paper 计划中。
 
@@ -18,18 +18,31 @@ Claude Code、Cursor、自定义 agent 都说 MCP,但 Minecraft 服务器不说�
 
 | 类别 | 工具 | 用途 |
 |---|---|---|
+| 自查 | `whoami` | agent 第一件事该调的:自己的 token tier、哪些工具免审批、有没有 OP 在线能审批、写文件白名单、build zones、各工具体积上限、WorldEdit/spark 装没装 |
 | 操作 | `ping` `run_console_command` `broadcast` | 跑控制台命令、广播消息 |
 | 玩家 | `list_online_players` `get_player_info` `get_player_inventory` | 在线列表、详细位姿/朝向/look_target/状态效果、完整背包 |
-| 世界 | `get_world_info` `get_block` `get_blocks_region` `get_biome` `raycast` `list_entities_near` `list_dimensions` | 时间/天气/seed、单点方块、区域 RLE 读取(≤4096)、群系、自由射线、附近实体 |
+| 世界读取 | `get_world_info` `get_block` `get_blocks_region` `find_blocks` `get_biome` `raycast` `list_entities_near` `list_dimensions` | 时间/天气/seed、单点方块、区域 RLE(≤4096)、**大范围找方块只返回命中点**、群系、自由射线、附近实体 |
+| 世界写入(原生,不需要 WorldEdit) | `set_block` `fill_blocks` `set_blocks` `undo_blocks` `save_block_snapshot` `list_snapshots` `restore_block_snapshot` | 单点/长方体/任意点集写入,支持 blockstate + 方块实体 NBT;独立撤销栈;快照存取闭环(带 offset 即 copy-paste) |
+| NBT | `get_nbt` `set_nbt` | 方块实体/实体/玩家/背包槽的原始 NBT 读写,支持 NBT path;附魔、村民交易、刷怪笼、模组内部数据全都能碰 |
+| 玩家/实体控制 | `teleport` `give_item` `set_gamemode` `apply_effect` `spawn_entity` `remove_entities` `modify_entity` | 传送(含跨维度/落到地表)、给物品(带 NBT)、切模式、状态效果、生成/清理/改实体 |
+| 世界控制 | `set_world_property` `force_load_chunks` `save_world` | 时间/天气/难度/gamerule 写入、区块强加载、手动落盘 |
+| 异步任务 | `start_task` `get_task` `cancel_task` `list_tasks` | 长任务从单次 RPC 解耦:立刻返回 task_id,分 tick 执行 + 进度上报 + 可取消 |
 | 注册表 | `list_block_ids` `list_item_ids` `list_entity_ids` `list_biome_ids` | 分页 + 子串过滤 |
 | 性能 | `get_server_stats` `tick_profile` `thread_dump` `list_mods` | TPS/MSPT、tick 分布、JVM 线程 dump、已装 mod 列表 |
 | 游戏内请求 API | `agent_heartbeat` `get_agent_requests` `update_agent_request_status` `reply_agent_request` | 主 mod 提供请求队列和 MCP API;游戏内 `/agent` 命令由可选附属 mod `mc-agent-link-agent` 提供 |
-| 观察(pull) | `get_recent_events` `get_recent_logs` | 读最近的聊天/进出/死亡事件,以及完整服务器日志(含异常栈) |
-| 文件(沙盒) | `list_dir` `read_server_file` `write_config_file` | 服务端 root 下任意文件**只读**;`config/**` 才能写,且自动备份 |
+| 观察(pull) | `get_recent_events` `get_recent_logs` | 聊天/进出/死亡,外加 **command / container_open / entity_death / explosion / player_hurt / advancement / dimension_change**;`block_place` 等高频 topic 按需开启 |
+| 文件(沙盒) | `list_dir` `read_server_file` `read_config` `write_config_file` | 服务端 root 下任意文件**只读**;`config/**` 才能写,且自动备份 |
 | Spark 集成(选装) | `spark_status` `spark_stats` `spark_profiler_start/stop/cancel` `spark_health_report` | 装了 [spark](https://spark.lucko.me) mod 之后,agent 能跑火焰图、拿 viewer URL、读 GC 细节 |
+| WorldEdit 集成(选装) | `we_status` `we_set` `we_replace` `we_sphere` `we_cyl` `we_undo` | 超大选区更快,球/柱生成是原生工具没有的;独立于 `undo_blocks` 的撤销栈 |
 | 稳定 addon API | `world.agentlink.api.AgentLinkApi` `BaseAddonTool` | 可选附属 mod 能注册自己的 MCP 工具,自动加上 `<modid>__` 前缀,并出现在 HTTP `tools/list` 里 |
 
 完整工具目录(含每个工具的入参/返回字段)见 [docs/tools.md](docs/tools.md)。协议字段、错误码、沙盒边界看 [docs/protocol.md](docs/protocol.md)。
+
+### 两条边界值得单独说
+
+**长任务必须走 `start_task`。** 超过同步体积上限的调用会返回 `VOLUME_TOO_LARGE`,并把该用的 `start_task` 调用原样写在错误信息里 —— agent 不需要自己切块。任务在 dedicated executor 上按 `tasks.blocks_per_tick` 分 tick 执行,服务器不会被一次大 fill 冻住。
+
+**`build_zones` 让高频写入不必每次弹审批。** 在 `config/agent-link.toml` 里划一个 bbox,footprint **完整落在**区域内的空间写入直接跳过审批;跨界的照旧弹窗,绝不静默裁剪。默认空列表,即行为与 0.4.x 完全一致。
 
 ## 架构
 
@@ -51,7 +64,7 @@ Claude Code、Cursor、自定义 agent 都说 MCP,但 Minecraft 服务器不说�
 - **Forge mod** 跑在 Minecraft 服务端 JVM 里,起两个监听:
   - `:25581/mcp` —— MCP Streamable HTTP,host(Claude Code、Cursor、…)直接连
   - `:25580` —— 自家 WebSocket 协议,服务非 MCP 客户端(moderation bot、stdio bridge)
-- 所有触碰世界状态的活儿都派发到主线程,线程安全。
+- 所有触碰世界状态的活儿都派发到主线程,线程安全。声明 `offThread()` 的工具(文件 IO、分片写入、等审批)跑在 worker 池上,需要碰世界时通过 `ServerThread.call` 跳回主线程 —— 慢工具不再拖 tick。
 - **多 agent**:HTTP + WebSocket 各自接受多个并发连接。
 - **游戏内审批**:MCP 工具调用可在游戏聊天里弹出 `[允许一次] [拒绝] [始终允许该工具] [复制详情]` 按钮,OP 点击即可审批,不需要手打命令。
 - **可扩展**:附属 mod 可以通过 `world.agentlink.api.AgentLinkApi.registerTool(...)` 注册自定义工具;工具名会自动命名空间化成 `<modid>__<tool>`。

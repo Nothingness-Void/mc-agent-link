@@ -25,6 +25,68 @@ Optional addons can provide higher-level features:
 
 These addons should be separate repositories or separately released artifacts that declare a Forge dependency on `agentlink`.
 
+## Registering your own MCP tools
+
+`world.agentlink.api.AgentLinkApi` is the supported surface. Everything under
+`world.agentlink.dispatch`, `world.agentlink.transport` and `world.agentlink.config` is internal and
+may change between releases.
+
+```java
+AgentLinkApi.registerTool("myaddon", new BaseAddonTool(
+        "echo",
+        "Echo the arguments back.",
+        schema()) {
+    @Override
+    protected JsonObject invoke(JsonObject args) {
+        return args;
+    }
+});
+```
+
+The registered name becomes `myaddon__echo`. It appears in MCP `tools/list`, flows through the same
+approval pipeline as built-in tools, and respects the same role tiers. Register from your `@Mod`
+constructor — calls made before the server starts are queued until the dispatcher exists.
+
+### Threading
+
+Your `invoke` runs on the **main server thread** by default, which is what makes world access safe.
+If your tool blocks — an HTTP call, a database query, a large file read — that block is tick time, and
+players feel it directly.
+
+Pass `offThread = true` to the four-argument `BaseAddonTool` constructor to run on a worker pool
+instead:
+
+```java
+new BaseAddonTool("fetch_stats", "…", schema(), /* offThread */ true) { … }
+```
+
+Off-thread tools must not touch `ServerLevel`, entities, or block state directly. When you need world
+access from an off-thread tool, hop back:
+
+```java
+String blockId = ServerThread.call(server, () -> BlockWriter.idOf(level.getBlockState(pos)));
+```
+
+That is the same mechanism the base mod's sliced write tools use to spread a large edit across ticks.
+
+### Sensitive tools
+
+Anything your addon exposes that mutates state or reads secrets should be added to
+`approval.admin_only_tools` in `agent-link.toml` — by its full prefixed name, e.g.
+`myaddon__delete_everything`. Tools absent from every tier list fall through to tier 3, where any
+online OP can approve them.
+
+If your tool arguments can carry secrets, add `<tool>.<argkey>` entries to `audit.redact_args` so the
+audit log records a length instead of the value.
+
+### Build zones
+
+If your addon writes to the world, `AgentLinkApi.isInBuildZone(dim, x, y, z)` reports whether a
+position sits inside a region the operator marked as the agent's sandbox. Reusing it means the
+operator configures one geometric boundary rather than two. It reports containment only — approval
+still runs, and the base mod's automatic geometric exemption applies only to tools it recognizes as
+spatial.
+
 ## Current base API surface
 
 The current in-JVM API for `/agent` request addons is:

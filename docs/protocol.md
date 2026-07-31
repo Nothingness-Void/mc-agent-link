@@ -58,6 +58,12 @@ Events are pushed only to clients that subscribed via `subscribe_events`.
 
 The server processes incoming requests on its WebSocket I/O thread, then dispatches the work to the main server tick thread before touching world state. Responses are sent back asynchronously. Order of responses is **not guaranteed** to match order of requests — always correlate by `id`.
 
+Since 0.5.0 a tool may declare itself off-thread, in which case the dispatcher runs it on a small
+worker pool instead of the tick thread. Only tools that either avoid world state entirely (file I/O,
+JVM introspection, waiting on an approval future) or hop back on-thread per unit of work do this — the
+motivation is that a tool blocking for seconds would otherwise freeze the server for its whole
+duration. World access itself is still always on the tick thread; `ServerLevel` is not thread-safe.
+
 ## Versioning
 
 `v` is the protocol major version. Breaking changes bump `v`. Servers MUST reject frames with a `v` they do not support and respond with `{"type":"response", "ok":false, "error":{"code":"UNSUPPORTED_VERSION", ...}}`.
@@ -76,7 +82,7 @@ These MUST be implemented by any conforming server. Per-loader extensions live u
 | `get_player_info` | `{"name": "Steve"}` | `{"name","uuid","pos":[x,y,z],"dim","yaw","pitch","health","max_health","food","xp_level","gamemode","ping"}` |
 | `broadcast` | `{"message": "hi all", "color": "yellow"}` | `{"sent": true, "recipients": 3}` |
 | `get_server_stats` | `{}` | `{"tps":19.97,"mspt":12.4,"mem_used_mb":4096,"mem_max_mb":16384,"loaded_chunks":1234,"online":3,"max_players":20}` |
-| `get_recent_events` | `{"since_seq":0,"limit":50,"topics":["chat",...]}` | `{"events":[{"seq":N,"ts":...,"topic":"chat","data":{...}}], "returned":N, "head_seq":N, "oldest_seq":1, "buffer_capacity":1024, "truncated":false}` |
+| `get_recent_events` | `{"since_seq":0,"limit":50,"topics":["chat",...]}` | `{"events":[{"seq":N,"ts":...,"topic":"chat","data":{...}}], "returned":N, "head_seq":N, "oldest_seq":1, "buffer_capacity":4096, "truncated":false}` |
 | `get_recent_logs` | `{"since_seq":0,"limit":100,"levels":["WARN","ERROR"],"contains":"foo"}` | `{"logs":[{"seq":N,"ts":...,"level":"INFO","logger":"...","message":"..."}], "returned":N, "head_seq":N, "oldest_seq":1, "buffer_capacity":2048, "truncated":false}` |
 | `subscribe_events` | `{"topics":["chat","player_join","player_leave","player_death"]}` | `{"subscribed":["chat","player_join",...]}` |
 | `unsubscribe_events` | `{"topics":["chat"]}` | `{"unsubscribed":["chat"]}` |
@@ -95,7 +101,7 @@ These MUST be implemented by any conforming server. Per-loader extensions live u
 
 ### Pull vs push
 
-The default and recommended consumption mode is **pull**: every event is appended to a server-side ring buffer (1024 entries) and agents call `get_recent_events` when they want to know what's been happening. This way the LLM only spends tokens on events the agent explicitly requested.
+The default and recommended consumption mode is **pull**: every event is appended to a server-side ring buffer (4096 entries since 0.5.0, 1024 before) and agents call `get_recent_events` when they want to know what's been happening. This way the LLM only spends tokens on events the agent explicitly requested.
 
 For incremental polling pass the previous response's `head_seq` as `since_seq` next time. Events older than `oldest_seq` have been evicted from the buffer.
 
@@ -103,12 +109,35 @@ For incremental polling pass the previous response's `head_seq` as `since_seq` n
 
 ## Event topics (v0)
 
-| topic | data shape |
-|---|---|
-| `chat` | `{"player","uuid","message"}` |
-| `player_join` | `{"player","uuid","address"}` |
-| `player_leave` | `{"player","uuid"}` |
-| `player_death` | `{"player","uuid","cause","killer"}` |
+Every entry also carries `seq`, `ts` and `topic` at the envelope level; the shapes below are the `data`
+object. Adding a topic is not a breaking change, so `v` stays 0 — clients MUST ignore topics they do not
+recognize rather than erroring.
+
+| topic | since | data shape |
+|---|---|---|
+| `chat` | 0.1 | `{"player","uuid","message"}` |
+| `player_join` | 0.1 | `{"player","uuid","address","dim","x","y","z"}` |
+| `player_leave` | 0.1 | `{"player","uuid","dim","x","y","z"}` |
+| `player_death` | 0.1 | `{"player","uuid","cause","killer?","killer_type?","killer_uuid?","death_message","dim","x","y","z"}` |
+| `command` | 0.5.0 | `{"command","source","player","uuid?","dim?","x?","y?","z?","is_op?","cancelled"}` — `player` is `@console` for console-issued commands |
+| `container_open` | 0.5.0 | `{"player","uuid","menu_type","dim","x","y","z"}` |
+| `entity_death` | 0.5.0 | `{"entity_type","entity_uuid","custom_name?","cause","killer","killer_uuid","dim","x","y","z"}` — emitted only when a player caused the death |
+| `player_respawn` | 0.5.0 | `{"player","uuid","end_conquered","dim","x","y","z"}` |
+| `dimension_change` | 0.5.0 | `{"player","uuid","from_dim","to_dim","x","y","z"}` |
+| `player_hurt` | 0.5.0 | `{"player","uuid","amount","health_before","cause","attacker?","attacker_type?","dim","x","y","z"}` — damage below 1.0 is not recorded |
+| `advancement` | 0.5.0 | `{"player","uuid","advancement","title?"}` — `recipes/*` excluded |
+| `explosion` | 0.5.0 | `{"x","y","z","dim","blocks_destroyed","entities_affected","source_type?","source_uuid?","caused_by?","caused_by_uuid?"}` |
+| `server` | 0.5.0 | `{"kind", ...}` — agent-link's own notes. `kind:"verbose_throttled"` carries `{actor_uuid,suppressed,window_ms,note}` |
+| `block_place` | 0.5.0 † | `{"player","uuid","block","replaced","dim","x","y","z"}` |
+| `block_break` | 0.5.0 † | `{"player","uuid","block","dim","x","y","z"}` |
+| `item_pickup` | 0.5.0 † | `{"player","uuid","item","count","dim","x","y","z"}` |
+| `item_drop` | 0.5.0 † | `{"player","uuid","item","count","dim","x","y","z"}` |
+
+† Recorded only when listed in `events.verbose_topics`. These are high-volume enough that recording them
+unconditionally evicts everything else from the ring buffer within a minute. Even when enabled, each
+actor is limited to 40 verbose events per 10 s window; the first drop in a window emits a `server` event
+so consumers know the counts are incomplete. **Absence of a verbose topic is not evidence that nothing
+happened** — check whether the operator enabled it.
 
 ## Filesystem sandbox
 
@@ -321,3 +350,65 @@ If no eligible approver is online, an approver denies the request, or `approval.
 | `INTERNAL_ERROR` | unexpected exception (server logs the trace) |
 | `TIMEOUT` | tool exceeded its server-side budget |
 | `SPARK_UNAVAILABLE` | a `spark_*` tool was called but the spark mod is not installed |
+| `WE_NOT_AVAILABLE` | a `we_*` tool was called but WorldEdit / FAWE is not installed |
+| `WE_ERROR` | the WorldEdit bridge failed (reflection or WE-side error) |
+| `NOT_FOUND` | the addressed target does not exist: no block entity at that position, no loaded entity with that UUID, player offline, empty inventory slot, unknown task or snapshot |
+| `VOLUME_TOO_LARGE` | a spatial call exceeded its synchronous limit. The message names the exact `start_task` call to use instead — do not pre-split the region |
+| `SERVER_BUSY` | an off-thread tool waited too long for a slot on the server tick thread (default 30 s) |
+| `NBT_REJECTED` | the target refused an NBT payload (wrong shape for that block entity / entity, or a resulting item stack that decoded as empty) |
+| `PROTECTED_KEY` | `set_nbt` refused to overwrite structural state the engine owns (`UUID`, `Pos`, `id`, …) |
+| `NOTHING_TO_UNDO` | `undo_blocks` was called with an empty native undo stack |
+| `TASK_CANCELLED` | a task stopped because cancellation was requested. Surfaces as the task's terminal state, not usually as a tool error |
+| `REFUSED` | the operation is categorically disallowed rather than merely unpermitted — e.g. `remove_entities` on a player |
+| `UNSUPPORTED` | the request is valid but this implementation cannot serve it (e.g. a gamerule with a custom value type) |
+| `UNAVAILABLE` | a subsystem is not running (task manager, dispatcher) |
+| `SERVER_STOPPING` | the server began shutting down before the request could be served |
+
+## Async tasks (0.5.0)
+
+MCP is request/response, and every layer between an agent and the server has a timeout — the MCP host,
+the HTTP client, an in-game bridge. A multi-minute operation trips one of them, and when the client
+gives up the work keeps running with nobody reading the result.
+
+`start_task { tool, args }` queues another tool and returns `{ task_id }` within milliseconds;
+`get_task { task_id, wait_ms? }` polls it, `cancel_task` requests a stop, `list_tasks` enumerates.
+
+Guarantees a conforming implementation must preserve:
+
+1. **Approval happens before queueing.** The wrapped tool goes through the normal approval pipeline
+   synchronously; a denial is returned from `start_task` itself. Without this, wrapping
+   `run_console_command` in a task would be a universal permission bypass.
+2. **Cancellation is cooperative.** A task stops at a slice boundary; work already committed to the
+   world stays committed. Interrupting a thread mid-write risks an inconsistent chunk, which is worse
+   than a partial edit that an undo entry can reverse.
+3. **Tasks are not resumed after a restart.** Records persist to
+   `config/agent-link/tasks/<id>.json` as history, but replaying a half-finished edit against a world
+   that may have changed offline is more dangerous than losing the task.
+4. **Sliced execution is per-tool, not universal.** Tools that opt in yield between slices so the tick
+   loop keeps running; others execute as one on-thread unit. `start_task`'s response says which case
+   applies, so the agent does not promise the user a responsive server when it cannot deliver one.
+
+## Build zones (0.5.0)
+
+An operator may declare regions in `config/agent-link.toml` where spatial writes skip in-game approval:
+
+```toml
+[[build_zones]]
+  label = "agent plot"
+  dim = "minecraft:overworld"
+  min = [100, -64, 100]
+  max = [200, 320, 200]
+```
+
+Semantics that matter for conformance:
+
+- A call is exempt only when its **entire** affected region lies inside a single zone. A partial overlap
+  prompts as normal and is **never** clipped to fit — silently doing something other than what was asked
+  is worse than asking.
+- The exemption applies only to tools that declare a footprint ahead of the approval decision. A tool
+  that declares nothing is never exempt; an undeclared footprint counts as unbounded.
+- Only spatial edits qualify. `run_console_command` is excluded even though a command may be spatial,
+  because a footprint cannot be inferred from a string the server did not parse — a guess there would be
+  a false guarantee.
+- Empty by default. Behaviour with no zones configured is identical to 0.4.x.
+- The resulting audit line records `outcome: build_zone`.

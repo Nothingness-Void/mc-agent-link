@@ -2,7 +2,7 @@
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
-Lets AI agents (via the [Model Context Protocol](https://modelcontextprotocol.io)) connect to a running Minecraft server. Run commands, query players, stream events, read mods/configs/crash-reports, profile tick spikes, and tune `config/*` files — anything an op could do at the console, an agent can do.
+Lets AI agents (via the [Model Context Protocol](https://modelcontextprotocol.io)) connect to a running Minecraft server. Run commands, query players, stream events, read mods/configs/crash-reports, profile tick spikes, tune `config/*` files — plus **native block writing, NBT read/write, player/entity/world control, and async long-running tasks**. Anything an op could do at the console, an agent can do, and most of it no longer needs `run_console_command`.
 
 > **Status:** early. Forge 1.20.1 server-side first. NeoForge / Fabric / Paper planned.
 
@@ -16,15 +16,36 @@ Modern AI agents (Claude Code, Cursor, custom agents) speak MCP. Minecraft serve
 
 | Group | Tools | Purpose |
 |---|---|---|
-| Operations | `ping` `run_console_command` `list_online_players` `get_player_info` `broadcast` `get_server_stats` | Run console commands, query players, broadcast |
+| Self-check | `whoami` | The first call an agent should make: its token tier, which tools bypass approval, whether an OP is online to approve anything, write globs, build zones, per-tool volume limits, and which optional integrations are installed |
+| Operations | `ping` `run_console_command` `list_online_players` `get_player_info` `get_player_inventory` `broadcast` `get_server_stats` | Run console commands, query players, broadcast |
+| World reading | `get_world_info` `get_block` `get_blocks_region` `find_blocks` `get_biome` `raycast` `list_entities_near` `list_dimensions` | Time/weather/seed, single blocks, region RLE (≤4096), **large-region block search returning only hits**, biomes, free rays, nearby entities |
+| World writing (native, no WorldEdit) | `set_block` `fill_blocks` `set_blocks` `undo_blocks` `save_block_snapshot` `list_snapshots` `restore_block_snapshot` | Single / cuboid / arbitrary-position-set writes with blockstate properties and block-entity NBT; own undo stack; snapshot round-trip (with `offset`, a working copy-paste) |
+| NBT | `get_nbt` `set_nbt` | Raw NBT on block entities, entities, players and inventory slots with NBT-path support — enchantments, villager trades, spawners, modded internals |
+| Player & entity control | `teleport` `give_item` `set_gamemode` `apply_effect` `spawn_entity` `remove_entities` `modify_entity` | Teleport (cross-dimension, snap-to-surface), give items with NBT, game modes, status effects, spawn / clean up / edit entities |
+| World control | `set_world_property` `force_load_chunks` `save_world` | Time / weather / difficulty / gamerule writes, chunk force-loading, explicit flush to disk |
+| Async tasks | `start_task` `get_task` `cancel_task` `list_tasks` | Decouples long work from a single RPC: returns a task id immediately, slices across ticks, reports progress, cancellable |
+| Registries | `list_block_ids` `list_item_ids` `list_entity_ids` `list_biome_ids` | Paginated with substring filter |
 | In-game request API | `agent_heartbeat` `get_agent_requests` `update_agent_request_status` `reply_agent_request` | The base mod provides the queue and MCP API; the in-game `/agent` command is provided by the optional `mc-agent-link-agent` addon |
-| Observation (pull) | `get_recent_events` `get_recent_logs` | Recent chat / join / leave / death events and the full server console log |
+| Observation (pull) | `get_recent_events` `get_recent_logs` | Chat / join / leave / death, plus **command / container_open / entity_death / explosion / player_hurt / advancement / dimension_change**; high-frequency topics like `block_place` are opt-in |
 | Diagnosis | `tick_profile` `thread_dump` `list_mods` | Tick distribution, JVM thread dump, installed mods |
-| Filesystem (sandboxed) | `list_dir` `read_server_file` `write_config_file` | Read anywhere under server root; writes are limited to `config/**` with auto-backup |
+| Filesystem (sandboxed) | `list_dir` `read_server_file` `read_config` `write_config_file` | Read anywhere under server root; writes are limited to `config/**` with auto-backup |
 | Spark integration (optional) | `spark_status` `spark_stats` `spark_profiler_*` `spark_health_report` | When the [spark](https://spark.lucko.me) mod is installed, agents get flame graphs, GC details, and viewer URLs |
+| WorldEdit integration (optional) | `we_status` `we_set` `we_replace` `we_sphere` `we_cyl` `we_undo` | Faster on very large selections, and the only source of sphere/cylinder generation; separate undo stack from `undo_blocks` |
 | Stable addon API | `world.agentlink.api.AgentLinkApi` `BaseAddonTool` | Optional addon mods can register their own MCP tools, get an automatic `<modid>__` prefix, and appear in HTTP `tools/list` |
 
-Full wire-protocol fields, error codes, and sandbox boundaries: [docs/protocol.md](docs/protocol.md).
+Full tool catalog with per-tool arguments and return fields: [docs/tools.md](docs/tools.md). Wire-protocol fields, error codes, and sandbox boundaries: [docs/protocol.md](docs/protocol.md).
+
+### Two boundaries worth stating up front
+
+**Long operations must go through `start_task`.** Exceeding a synchronous volume limit returns
+`VOLUME_TOO_LARGE` with the exact `start_task` call to use instead — the agent never has to invent its
+own region splitting. Tasks run on a dedicated executor and slice at `tasks.blocks_per_tick`, so a
+single large fill does not freeze the server.
+
+**`build_zones` keeps frequent writes from spamming approval prompts.** Declare a bounding box in
+`config/agent-link.toml` and spatial writes whose **entire** footprint lands inside it skip approval.
+An edit straddling the boundary still prompts and is never silently clipped. Empty by default, so
+behaviour matches 0.4.x until an operator opts in.
 
 ## Architecture
 
@@ -46,7 +67,7 @@ Full wire-protocol fields, error codes, and sandbox boundaries: [docs/protocol.m
 - **Forge mod** runs *inside* the Minecraft server JVM and listens on two sockets:
   - `:25581/mcp` — MCP Streamable HTTP. Hosts (Claude Code, Cursor, …) connect directly.
   - `:25580` — agent-link WebSocket protocol for non-MCP clients (moderation bots, the stdio bridge).
-- All work is dispatched on the main server thread to stay thread-safe with world state.
+- World access is always dispatched on the main server thread to stay thread-safe. Tools that declare `offThread()` (file I/O, waiting on approval, sliced writes) run on a worker pool and hop back on-thread via `ServerThread.call` for the parts that need it — so a slow tool no longer stalls the tick loop.
 - **Multi-agent**: HTTP and WebSocket each accept many concurrent connections.
 - **In-game approval**: MCP tool calls can ask online OPs in Minecraft chat with clickable `[allow once] [deny] [always allow this tool] [copy details]` buttons.
 - **Extensible**: addon mods can register custom tools through `world.agentlink.api.AgentLinkApi.registerTool(...)`; names are automatically namespaced as `<modid>__<tool>`.
