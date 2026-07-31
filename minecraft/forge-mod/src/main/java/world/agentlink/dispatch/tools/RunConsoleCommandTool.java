@@ -65,12 +65,42 @@ public class RunConsoleCommandTool implements Tool {
         try {
             returnValue = mc.getCommands().getDispatcher().execute(command, stack);
         } catch (CommandSyntaxException e) {
+            recordEvent(command, -1, false);
             throw new ToolException("INVALID_ARGS", e.getMessage());
         }
+
+        recordEvent(command, returnValue, true);
 
         JsonObject r = new JsonObject();
         r.addProperty("return_value", returnValue);
         r.addProperty("output", String.join("\n", captured));
         return r;
+    }
+
+    /**
+     * Publish a {@code command} event for this invocation.
+     *
+     * <p>We execute through the Brigadier dispatcher directly (so we can capture output into our own
+     * sink), which bypasses Forge's {@code CommandEvent} — the hook {@link
+     * world.agentlink.events.ForgeEventBridge} listens on for player- and console-issued commands.
+     * Without this, {@code get_recent_events} would show commands run by humans but silently omit the
+     * agent's own, so an agent reviewing "what happened" could not see its own footprints. The
+     * {@code source} field distinguishes them.
+     */
+    private void recordEvent(String command, int returnValue, boolean ok) {
+        try {
+            JsonObject d = new JsonObject();
+            d.addProperty("command", command);
+            d.addProperty("source", "agent-link");
+            d.addProperty("player", "@agent");
+            d.addProperty("via", "run_console_command");
+            d.addProperty("ok", ok);
+            if (ok) d.addProperty("return_value", returnValue);
+            d.addProperty("cancelled", false);
+            world.agentlink.events.ForgeEventBridge.post(
+                    world.agentlink.events.EventTopics.COMMAND, d);
+        } catch (Throwable ignored) {
+            // Telemetry must never fail the command that already ran.
+        }
     }
 }

@@ -21,7 +21,13 @@ public final class EventBuffer {
 
     public record Entry(long seq, long ts, String topic, JsonObject data) {}
 
-    private static final EventBuffer INSTANCE = new EventBuffer(1024);
+    /**
+     * 0.5.0 raised this from 1024 because the topic set roughly quadrupled (commands, container
+     * access, explosions, hurt events). A busy server was wrapping the old buffer in well under a
+     * minute, which defeats the "ask what happened a few minutes ago" use case the pull model exists
+     * for. Entries are small JSON objects, so 4096 is a few MB at worst.
+     */
+    private static final EventBuffer INSTANCE = new EventBuffer(4096);
 
     public static EventBuffer get() { return INSTANCE; }
 
