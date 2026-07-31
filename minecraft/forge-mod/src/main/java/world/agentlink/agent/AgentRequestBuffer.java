@@ -38,6 +38,14 @@ public final class AgentRequestBuffer {
             String reply
     ) {}
 
+    public record QueueInfo(
+            String id,
+            Status status,
+            int running,
+            int pending,
+            int ahead
+    ) {}
+
     private static final AgentRequestBuffer INSTANCE = new AgentRequestBuffer(128);
     private static final int MAX_MESSAGE_CHARS = 500;
     private static final int MAX_STATUS_CHARS = 240;
@@ -59,6 +67,10 @@ public final class AgentRequestBuffer {
     }
 
     public synchronized Entry createFromPlayer(ServerPlayer player, String message) {
+        return createFromPlayer(player, "player", message);
+    }
+
+    public synchronized Entry createFromPlayer(ServerPlayer player, String source, String message) {
         String trimmed = trim(message, MAX_MESSAGE_CHARS);
         long seq = nextSeq.getAndIncrement();
         long now = System.currentTimeMillis();
@@ -67,7 +79,7 @@ public final class AgentRequestBuffer {
                 "agent-" + seq,
                 now,
                 now,
-                "player",
+                trim(source == null || source.isBlank() ? "player" : source, 32),
                 player.getGameProfile().getName(),
                 player.getUUID(),
                 trimmed,
@@ -171,6 +183,39 @@ public final class AgentRequestBuffer {
             out.add(e);
         }
         return out;
+    }
+
+    public synchronized int count(Status status) {
+        long head = head();
+        long start = oldestSeq();
+        int total = 0;
+        for (long s = start; s <= head; s++) {
+            Entry e = ring[(int) ((s - 1) % capacity)];
+            if (e != null && e.status() == status) total++;
+        }
+        return total;
+    }
+
+    public synchronized QueueInfo queueInfo(String id) {
+        Entry target = findById(id);
+        if (target == null) return null;
+        long head = head();
+        long start = oldestSeq();
+        int running = 0;
+        int pending = 0;
+        int ahead = 0;
+        for (long s = start; s <= head; s++) {
+            Entry e = ring[(int) ((s - 1) % capacity)];
+            if (e == null) continue;
+            if (e.status() == Status.WORKING) {
+                running++;
+                if (s < target.seq()) ahead++;
+            } else if (e.status() == Status.PENDING) {
+                pending++;
+                if (s < target.seq()) ahead++;
+            }
+        }
+        return new QueueInfo(target.id(), target.status(), running, pending, ahead);
     }
 
     public synchronized void markAgentSeen(String action) {
