@@ -3,6 +3,7 @@ package world.agentlink.config;
 import com.electronwill.nightconfig.core.file.CommentedFileConfig;
 import net.minecraftforge.fml.loading.FMLPaths;
 import world.agentlink.AgentLinkMod;
+import world.agentlink.sandbox.BuildZones;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -38,8 +39,48 @@ public final class AgentLinkConfig {
             boolean auditEnabled,
             List<String> auditRedactArgs,
             int auditMaxArgChars,
+            List<BuildZones.Zone> buildZones,
+            int taskMaxConcurrent,
+            int taskBlocksPerTick,
+            List<String> eventVerboseTopics,
             String version
     ) {}
+
+    /** Single source of truth for the version string reported over MCP and in the setup link. */
+    public static final String VERSION = "0.5.0-alpha";
+
+    /**
+     * Schema generation of the approval tables. Bumped whenever a release adds tools that need to be
+     * merged into an already-written {@code agent-link.toml} — see {@link #TIER_MIGRATIONS}.
+     */
+    private static final int APPROVAL_TABLE_VERSION = 1;
+
+    /**
+     * Per-release deltas applied to a config written by an older version.
+     *
+     * <p>The problem this solves: {@code auto_allow_tools} and {@code admin_only_tools} are persisted
+     * to the toml on first run. On an upgraded server the stored lists win, so tools added in a later
+     * release land in neither list — which silently does the wrong thing in both directions. New
+     * read-only tools become tier-3 (an OP must click for {@code whoami}, the very tool that explains
+     * why things need clicking), and new mutating tools become tier-3 instead of tier-4, i.e. any OP
+     * can approve {@code set_nbt} rather than only a configured admin. The second is a security
+     * regression introduced purely by upgrading.
+     *
+     * <p>We migrate additively and record the applied generation, so an entry the operator deliberately
+     * deleted is not resurrected on every boot. Only tools introduced *after* the stored generation are
+     * considered.
+     */
+    private record TierMigration(int version, List<String> autoAllow, List<String> adminOnly) {}
+
+    private static final List<TierMigration> TIER_MIGRATIONS = List.of(
+            new TierMigration(1,
+                    List.of("whoami", "find_blocks", "get_nbt", "list_snapshots",
+                            "start_task", "get_task", "cancel_task", "list_tasks"),
+                    List.of("set_block", "set_blocks", "fill_blocks", "undo_blocks",
+                            "restore_block_snapshot", "set_nbt",
+                            "teleport", "give_item", "set_gamemode", "apply_effect",
+                            "spawn_entity", "remove_entities", "modify_entity",
+                            "set_world_property", "force_load_chunks", "save_world")));
 
     private static final String FILE_NAME = "agent-link.toml";
     private static final List<String> DEFAULT_WRITE_ALLOW = List.of("config/**");
@@ -66,7 +107,12 @@ public final class AgentLinkConfig {
             "get_recent_events", "get_recent_logs", "subscribe_events", "unsubscribe_events",
             "tick_profile", "thread_dump",
             // Spark read-only.
-            "spark_status", "spark_stats", "spark_health_report"
+            "spark_status", "spark_stats", "spark_health_report",
+            // 0.5.0 read-only additions.
+            "whoami", "find_blocks", "get_nbt", "list_snapshots",
+            // Async task bookkeeping. Starting a task re-checks the wrapped tool's own tier, so
+            // these four are safe to auto-allow — see StartTaskTool.
+            "start_task", "get_task", "cancel_task", "list_tasks"
     );
     private static final List<String> DEFAULT_APPROVAL_ADMIN_ONLY_TOOLS = List.of(
             // High-impact server mutation.
@@ -78,7 +124,16 @@ public final class AgentLinkConfig {
             // Container peek bypasses the open animation; treat as snooping and require admin.
             "get_container",
             // WorldEdit mutating operations (each call can flip thousands of blocks).
-            "we_set", "we_replace", "we_sphere", "we_cyl", "we_undo"
+            "we_set", "we_replace", "we_sphere", "we_cyl", "we_undo",
+            // 0.5.0 native block writes. Subject to build_zones: a call whose whole footprint is
+            // inside a configured zone skips the prompt.
+            "set_block", "set_blocks", "fill_blocks", "undo_blocks", "restore_block_snapshot",
+            // NBT writes can forge items, rewrite container contents, or corrupt an entity.
+            "set_nbt",
+            // Player / entity / world state mutation.
+            "teleport", "give_item", "set_gamemode", "apply_effect",
+            "spawn_entity", "remove_entities", "modify_entity",
+            "set_world_property", "force_load_chunks", "save_world"
     );
     private static final List<String> DEFAULT_AUDIT_REDACT_ARGS = List.of(
             // Console payload often contains tokens, op-set commands, /seed output, etc.
@@ -87,7 +142,10 @@ public final class AgentLinkConfig {
             "write_config_file.content",
             "write_config_file.base64",
             // read_config returns file content — masked at record time, but list it for traceability.
-            "read_config.content"
+            "read_config.content",
+            // set_nbt payloads can be arbitrarily large and carry item/entity internals.
+            "set_nbt.snbt",
+            "set_nbt.value"
     );
     private static volatile Snapshot CURRENT;
 
@@ -120,12 +178,51 @@ public final class AgentLinkConfig {
             List<String> approvalAutoAllowTools = readStringList(cfg, "approval.auto_allow_tools", DEFAULT_APPROVAL_AUTO_ALLOW_TOOLS);
             List<String> approvalTrustedTools = readStringList(cfg, "approval.trusted_tools", List.of());
             List<String> approvalAdminOnlyTools = readStringList(cfg, "approval.admin_only_tools", DEFAULT_APPROVAL_ADMIN_ONLY_TOOLS);
+
+            // Merge in tools added by releases newer than whatever wrote this file. On a fresh config
+            // the defaults above already contain everything and this is a no-op.
+            int storedTableVersion = fresh
+                    ? APPROVAL_TABLE_VERSION
+                    : cfg.getIntOrElse("approval.table_version", 0);
+            if (storedTableVersion < APPROVAL_TABLE_VERSION) {
+                approvalAutoAllowTools = new ArrayList<>(approvalAutoAllowTools);
+                approvalAdminOnlyTools = new ArrayList<>(approvalAdminOnlyTools);
+                List<String> addedAuto = new ArrayList<>();
+                List<String> addedAdmin = new ArrayList<>();
+                for (TierMigration m : TIER_MIGRATIONS) {
+                    if (m.version() <= storedTableVersion) continue;
+                    for (String tool : m.autoAllow()) {
+                        if (!containsTool(approvalAutoAllowTools, tool)
+                                && !containsTool(approvalAdminOnlyTools, tool)) {
+                            approvalAutoAllowTools.add(tool);
+                            addedAuto.add(tool);
+                        }
+                    }
+                    for (String tool : m.adminOnly()) {
+                        if (!containsTool(approvalAdminOnlyTools, tool)
+                                && !containsTool(approvalAutoAllowTools, tool)) {
+                            approvalAdminOnlyTools.add(tool);
+                            addedAdmin.add(tool);
+                        }
+                    }
+                }
+                if (!addedAuto.isEmpty() || !addedAdmin.isEmpty()) {
+                    AgentLinkMod.LOG.info("agent-link: migrated approval tables to generation {} "
+                                    + "(auto_allow += {}, admin_only += {})",
+                            APPROVAL_TABLE_VERSION, addedAuto, addedAdmin);
+                }
+            }
             List<UUID> roleAdminUuids = readUuidList(cfg, "roles.admin_uuids");
             List<UUID> roleGuestUuids = readUuidList(cfg, "roles.guest_uuids");
 
             boolean auditEnabled = cfg.getOrElse("audit.enabled", true);
             List<String> auditRedactArgs = readStringList(cfg, "audit.redact_args", DEFAULT_AUDIT_REDACT_ARGS);
             int auditMaxArgChars = Math.max(64, cfg.getIntOrElse("audit.max_arg_chars", 2000));
+
+            List<BuildZones.Zone> buildZones = readBuildZones(cfg);
+            int taskMaxConcurrent = Math.max(1, Math.min(8, cfg.getIntOrElse("tasks.max_concurrent", 2)));
+            int taskBlocksPerTick = Math.max(64, Math.min(200_000, cfg.getIntOrElse("tasks.blocks_per_tick", 8000)));
+            List<String> eventVerboseTopics = readStringList(cfg, "events.verbose_topics", List.of());
 
             if (token.isBlank()) {
                 token = generateToken();
@@ -167,6 +264,13 @@ public final class AgentLinkConfig {
             cfg.setComment("approval.enabled", " In-game MCP tool approval. When true, non-auto-allowed tools wait for in-game chat approval.");
             cfg.set("approval.timeout_seconds", approvalTimeoutSeconds);
             cfg.setComment("approval.timeout_seconds", " Seconds before a pending in-game tool approval is denied automatically.");
+            cfg.set("approval.table_version", APPROVAL_TABLE_VERSION);
+            cfg.setComment("approval.table_version",
+                    "\n Generation marker for the two tables below. agent-link merges tools added by newer releases\n" +
+                    " into them once, then records the generation here. Without this, upgrading would leave new tools\n" +
+                    " in neither list: new read-only tools would start demanding an OP click, and new mutating tools\n" +
+                    " would be approvable by any OP instead of only a configured admin.\n" +
+                    " Entries you delete stay deleted. Lower this number to re-apply a migration.");
             cfg.set("approval.auto_allow_tools", approvalAutoAllowTools);
             cfg.setComment("approval.auto_allow_tools",
                     "\n Tier 1: tools that bypass in-game approval entirely. Default = read-only world / server / log / spark-status\n" +
@@ -214,6 +318,28 @@ public final class AgentLinkConfig {
                     "\n Hard truncation cap on the per-line args JSON in the audit log. Anything longer is truncated and a\n" +
                     " {truncated_at=N} marker is appended. Default 2000.");
 
+            cfg.set("tasks.max_concurrent", taskMaxConcurrent);
+            cfg.setComment("tasks.max_concurrent",
+                    "\n How many async tasks (start_task) may run at once. Long edits are sliced across ticks, so more\n" +
+                    " concurrency means more work competing for the same per-tick budget. Default 2, max 8.");
+            cfg.set("tasks.blocks_per_tick", taskBlocksPerTick);
+            cfg.setComment("tasks.blocks_per_tick",
+                    "\n Per-tick block budget for a sliced async edit. Lower = gentler on TPS but slower; higher = the\n" +
+                    " reverse. Default 8000 (~a few ms/tick on typical hardware). Range 64..200000.");
+
+            cfg.set("events.verbose_topics", eventVerboseTopics);
+            cfg.setComment("events.verbose_topics",
+                    "\n High-frequency event topics to record. Empty (default) = off.\n" +
+                    " Allowed: \"block_place\", \"block_break\", \"item_pickup\", \"item_drop\".\n" +
+                    "\n" +
+                    " These are what an investigation usually wants (\"who broke this?\"), and also what a single\n" +
+                    " player with an efficiency pickaxe emits hundreds of per minute — enabling them all can push\n" +
+                    " chat/join/death out of the 4096-entry ring buffer within a minute. Even when enabled, each\n" +
+                    " player is capped at 40 verbose events per 10s window; drops are reported on the \"server\" topic\n" +
+                    " so an agent knows the counts are incomplete.");
+
+            writeBuildZonesComment(cfg, buildZones);
+
             cfg.save();
             CURRENT = new Snapshot(port, allowRemote, token, writeAllow, writeDeny,
                     mcpEnabled, mcpPort, mcpAllowedOrigins,
@@ -224,13 +350,86 @@ public final class AgentLinkConfig {
                     auditEnabled,
                     java.util.Collections.unmodifiableList(auditRedactArgs),
                     auditMaxArgChars,
-                    "0.4.0-alpha");
+                    java.util.Collections.unmodifiableList(buildZones),
+                    taskMaxConcurrent,
+                    taskBlocksPerTick,
+                    java.util.Collections.unmodifiableList(eventVerboseTopics),
+                    VERSION);
 
             if (fresh) {
                 AgentLinkMod.LOG.info("agent-link wrote default config to {}", path);
                 AgentLinkMod.LOG.info("agent-link generated token: {}", token);
             }
         }
+    }
+
+    /**
+     * Read {@code build_zones}. A malformed entry is logged and skipped rather than failing the
+     * load — a typo must never widen the agent's permissions, and it must not brick startup either.
+     */
+    private static List<BuildZones.Zone> readBuildZones(CommentedFileConfig cfg) {
+        Object raw = cfg.get("build_zones");
+        if (raw == null) return new ArrayList<>();
+        if (!(raw instanceof List<?> list)) {
+            AgentLinkMod.LOG.warn("agent-link: config key 'build_zones' is not a list of tables; ignoring");
+            return new ArrayList<>();
+        }
+        List<BuildZones.Zone> out = new ArrayList<>();
+        for (Object item : list) {
+            Object normalized = item instanceof com.electronwill.nightconfig.core.Config c
+                    ? c.valueMap()
+                    : item;
+            BuildZones.Zone zone = BuildZones.parse(normalized);
+            if (zone == null) {
+                AgentLinkMod.LOG.warn("agent-link: ignoring malformed build_zones entry: {}", item);
+                continue;
+            }
+            out.add(zone);
+            AgentLinkMod.LOG.info("agent-link: build zone '{}' {} [{},{},{}]..[{},{},{}] ({} blocks)",
+                    zone.label(), zone.dimension(),
+                    zone.box().minX(), zone.box().minY(), zone.box().minZ(),
+                    zone.box().maxX(), zone.box().maxY(), zone.box().maxZ(),
+                    zone.box().volume());
+        }
+        return out;
+    }
+
+    /**
+     * We only document {@code build_zones} in a comment instead of writing a default entry. An
+     * auto-created zone would be a permission grant nobody asked for.
+     */
+    private static void writeBuildZonesComment(CommentedFileConfig cfg, List<BuildZones.Zone> zones) {
+        if (cfg.get("build_zones") == null) {
+            cfg.set("build_zones", new ArrayList<>());
+        }
+        cfg.setComment("build_zones",
+                "\n Regions where the agent may build WITHOUT a per-call in-game approval prompt.\n" +
+                " Empty (default) = every mutating spatial tool goes through approval, as in 0.4.x.\n" +
+                "\n" +
+                " A call is exempted only when its ENTIRE affected region fits inside one zone. An edit that\n" +
+                " straddles a boundary still prompts — it is never silently clipped.\n" +
+                "\n" +
+                " Applies to: set_block, set_blocks, fill_blocks, restore_block_snapshot, we_set, we_replace,\n" +
+                " we_sphere, we_cyl, spawn_entity. It does NOT exempt run_console_command, write_config_file,\n" +
+                " set_nbt, or anything non-spatial.\n" +
+                "\n" +
+                " Example:\n" +
+                "   [[build_zones]]\n" +
+                "     label = \"agent plot\"\n" +
+                "     dim = \"minecraft:overworld\"\n" +
+                "     min = [100, -64, 100]\n" +
+                "     max = [200, 320, 200]");
+    }
+
+    /** Case-insensitive membership test, matching how the approval layer normalizes tool names. */
+    private static boolean containsTool(List<String> list, String tool) {
+        if (list == null) return false;
+        for (String entry : list) {
+            if (entry == null) continue;
+            String normalized = entry.trim();
+            if ("*".equals(normalized) || normalized.equalsIgnoreCase(tool)) return true;
+        }
+        return false;
     }
 
     private static List<String> readStringList(CommentedFileConfig cfg, String key, List<String> fallback) {
@@ -287,16 +486,22 @@ public final class AgentLinkConfig {
             }
             Snapshot snap = CURRENT;
             if (snap != null) {
-                CURRENT = new Snapshot(snap.listenPort(), snap.allowRemote(), snap.token(),
-                        snap.writeAllow(), snap.writeDeny(), snap.mcpEnabled(),
-                        snap.mcpListenPort(), snap.mcpAllowedOrigins(), snap.approvalEnabled(),
-                        snap.approvalTimeoutSeconds(), snap.approvalAutoAllowTools(), trusted,
-                        snap.approvalAdminOnlyTools(),
-                        snap.roleAdminUuids(), snap.roleGuestUuids(),
-                        snap.auditEnabled(), snap.auditRedactArgs(), snap.auditMaxArgChars(),
-                        snap.version());
+                CURRENT = withTrusted(snap, trusted);
             }
         }
+    }
+
+    /** Rebuild a snapshot with a new trusted-tools list, preserving every other field. */
+    private static Snapshot withTrusted(Snapshot snap, List<String> trusted) {
+        return new Snapshot(snap.listenPort(), snap.allowRemote(), snap.token(),
+                snap.writeAllow(), snap.writeDeny(), snap.mcpEnabled(),
+                snap.mcpListenPort(), snap.mcpAllowedOrigins(), snap.approvalEnabled(),
+                snap.approvalTimeoutSeconds(), snap.approvalAutoAllowTools(), trusted,
+                snap.approvalAdminOnlyTools(),
+                snap.roleAdminUuids(), snap.roleGuestUuids(),
+                snap.auditEnabled(), snap.auditRedactArgs(), snap.auditMaxArgChars(),
+                snap.buildZones(), snap.taskMaxConcurrent(), snap.taskBlocksPerTick(),
+                snap.eventVerboseTopics(), snap.version());
     }
 
     public static synchronized boolean removeApprovalTrustedTool(String ruleString) {
@@ -318,14 +523,7 @@ public final class AgentLinkConfig {
         if (removed) {
             Snapshot snap = CURRENT;
             if (snap != null) {
-                CURRENT = new Snapshot(snap.listenPort(), snap.allowRemote(), snap.token(),
-                        snap.writeAllow(), snap.writeDeny(), snap.mcpEnabled(),
-                        snap.mcpListenPort(), snap.mcpAllowedOrigins(), snap.approvalEnabled(),
-                        snap.approvalTimeoutSeconds(), snap.approvalAutoAllowTools(), trusted,
-                        snap.approvalAdminOnlyTools(),
-                        snap.roleAdminUuids(), snap.roleGuestUuids(),
-                        snap.auditEnabled(), snap.auditRedactArgs(), snap.auditMaxArgChars(),
-                        snap.version());
+                CURRENT = withTrusted(snap, trusted);
             }
         }
         return removed;

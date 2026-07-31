@@ -12,6 +12,7 @@ import world.agentlink.AgentLinkMod;
 import world.agentlink.config.AgentLinkConfig;
 import world.agentlink.config.AgentLinkConfig.Snapshot;
 import world.agentlink.i18n.AgentLinkLang;
+import world.agentlink.sandbox.BuildZones;
 import world.agentlink.transport.ClientSession;
 
 import java.util.ArrayList;
@@ -42,7 +43,24 @@ public final class AgentToolApproval {
      * check applies only to whole-tool trust.
      */
     private static final Set<String> PARAM_TRUSTABLE_TOOLS = Set.of(
-            "run_console_command", "broadcast", "write_config_file"
+            "run_console_command", "broadcast", "write_config_file",
+            // Spatial writes scope naturally on their block/dim arg — "only ever place dirt", or
+            // "only ever touch the nether" are both useful pins an operator may want.
+            "set_block", "fill_blocks", "set_blocks", "spawn_entity",
+            "give_item", "teleport", "apply_effect", "set_gamemode"
+    );
+    /**
+     * Tools whose approval can be satisfied geometrically by {@code build_zones}: if the call's
+     * declared footprint lies wholly inside a configured zone, it runs without a prompt.
+     *
+     * <p>Only spatial edits qualify. {@code run_console_command} is excluded even though a command
+     * can be spatial, because we cannot bound what an arbitrary command string will touch —
+     * inferring a footprint from text we did not parse would be a false guarantee.
+     */
+    private static final Set<String> BUILD_ZONE_TOOLS = Set.of(
+            "set_block", "set_blocks", "fill_blocks", "restore_block_snapshot",
+            "we_set", "we_replace", "we_sphere", "we_cyl",
+            "spawn_entity"
     );
     private static volatile AgentToolApproval CURRENT;
 
@@ -105,6 +123,12 @@ public final class AgentToolApproval {
             AgentLinkMod.LOG.info("agent-link approval bypassed for tool {}: trusted by rule {}", toolName, trustHit);
             return CompletableFuture.completedFuture(Decision.trustedRule(trustHit));
         }
+        BuildZones.Zone zone = matchBuildZone(normalizedTool, args);
+        if (zone != null) {
+            AgentLinkMod.LOG.info("agent-link approval bypassed for tool {}: inside build zone '{}'",
+                    toolName, zone.label());
+            return CompletableFuture.completedFuture(Decision.buildZone(zone.label()));
+        }
 
         // admin_only_tools narrows WHO sees the button (admin-only) when admins are configured.
         // When admin_uuids is empty, role-tiering is disabled and every OP can approve every tool —
@@ -127,6 +151,9 @@ public final class AgentToolApproval {
 
         String id = "approval-" + NEXT_ID.getAndIncrement();
         JsonObject argsCopy = args == null ? new JsonObject() : args.deepCopy();
+        // The declared-footprint key is internal bookkeeping; showing it to the approving OP is
+        // noise, and it would end up baked into any derived trust pattern.
+        argsCopy.remove(BuildZones.SCOPE_KEY);
         String argsText = GSON.toJson(argsCopy);
         PendingApproval approval = new PendingApproval(id, toolName, normalizedTool, adminOnly, argsCopy, argsText, System.currentTimeMillis(), new CompletableFuture<>());
         pending.put(id, approval);
@@ -269,6 +296,20 @@ public final class AgentToolApproval {
             if (rule.matches(normalizedTool, args)) return rule;
         }
         return null;
+    }
+
+    /**
+     * Geometric exemption. The tool declares its footprint on the args object before dispatch (see
+     * {@link BuildZones#declareScope}); we only trust that declaration for tools in
+     * {@link #BUILD_ZONE_TOOLS}, so an addon cannot smuggle a scope key onto an unrelated tool and
+     * buy itself a bypass.
+     */
+    private BuildZones.Zone matchBuildZone(String normalizedTool, JsonObject args) {
+        if (!BUILD_ZONE_TOOLS.contains(normalizedTool)) return null;
+        if (!BuildZones.anyConfigured()) return null;
+        BuildZones.Declared declared = BuildZones.readScope(args);
+        if (declared == null) return null;
+        return BuildZones.find(declared.dimension(), declared.box());
     }
 
     private boolean isAdminOnly(String normalizedTool) {
@@ -455,6 +496,7 @@ public final class AgentToolApproval {
         APPROVAL_DISABLED,
         TRUSTED_RULE,
         CONSOLE_TRUSTED,
+        BUILD_ZONE,
         APPROVED,
         DENIED,
         DENIED_NO_APPROVERS,
@@ -478,12 +520,18 @@ public final class AgentToolApproval {
                     || outcome == Outcome.APPROVAL_DISABLED
                     || outcome == Outcome.TRUSTED_RULE
                     || outcome == Outcome.CONSOLE_TRUSTED
+                    || outcome == Outcome.BUILD_ZONE
                     || outcome == Outcome.APPROVED;
             return new Decision(approved, outcome, null, null, null, reason);
         }
 
         public static Decision trustedRule(TrustRule rule) {
             return new Decision(true, Outcome.TRUSTED_RULE, null, null, rule.toString(), "trusted: " + rule);
+        }
+
+        /** Geometric exemption: the whole footprint sat inside an operator-declared build zone. */
+        public static Decision buildZone(String label) {
+            return new Decision(true, Outcome.BUILD_ZONE, null, null, null, "inside build zone: " + label);
         }
 
         public static Decision approvedBy(String actor, java.util.UUID actorUuid, String reason) {
