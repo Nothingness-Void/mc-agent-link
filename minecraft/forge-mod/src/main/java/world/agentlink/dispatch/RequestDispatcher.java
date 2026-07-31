@@ -6,6 +6,7 @@ import com.google.gson.JsonObject;
 import net.minecraft.server.MinecraftServer;
 import world.agentlink.AgentLinkMod;
 import world.agentlink.approval.AgentToolApproval;
+import world.agentlink.approval.CallTier;
 import world.agentlink.audit.AuditLog;
 import world.agentlink.dispatch.tools.AgentHeartbeatTool;
 import world.agentlink.dispatch.tools.BroadcastTool;
@@ -66,11 +67,17 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
 
 public class RequestDispatcher {
 
     private static final Gson GSON = new Gson();
+    /** Cap on concurrent off-thread tool executions. Small on purpose: these are I/O-ish, not CPU. */
+    private static final int WORKER_POOL_SIZE = 4;
     /** Pre-server tools queued via {@link world.agentlink.api.AgentLinkApi#registerTool}. Drained on construction. */
     private static final List<RegisteredEntry> PRE_REGISTERED = new ArrayList<>();
     private static final Object PRE_REGISTERED_LOCK = new Object();
@@ -80,9 +87,17 @@ public class RequestDispatcher {
     private final Map<String, Tool> tools = new ConcurrentHashMap<>();
     /** Insertion-ordered registry of addon tools so MCP tools/list can advertise their schemas. */
     private final Map<String, RegisteredEntry> addonTools = new LinkedHashMap<>();
+    /** Runs tools that declared {@link Tool#offThread()} so they can't stall the tick loop. */
+    private final ExecutorService workers;
 
     public RequestDispatcher(MinecraftServer mc) {
         this.mc = mc;
+        AtomicInteger workerSeq = new AtomicInteger(1);
+        this.workers = Executors.newFixedThreadPool(WORKER_POOL_SIZE, r -> {
+            Thread t = new Thread(r, "agent-link-tool-worker-" + workerSeq.getAndIncrement());
+            t.setDaemon(true);
+            return t;
+        });
         registerBuiltin(new PingTool(mc));
         registerBuiltin(new RunConsoleCommandTool(mc));
         registerBuiltin(new ListOnlinePlayersTool(mc));
@@ -205,10 +220,20 @@ public class RequestDispatcher {
             }
             @Override public String description() { return delegate.description(); }
             @Override public JsonObject inputSchema() { return delegate.inputSchema(); }
+            @Override public boolean offThread() { return delegate.offThread(); }
+            @Override public void declareScope(JsonObject args) { delegate.declareScope(args); }
         };
         tools.put(entry.fullName(), wrapped);
         addonTools.put(entry.fullName(), entry);
         AgentLinkMod.LOG.info("agent-link: registered addon tool {} (modId={})", entry.fullName(), entry.modId());
+    }
+
+    /**
+     * Look up a registered tool by its exact wire name (including any {@code <modid>__} prefix).
+     * Used by {@code start_task} to resolve the tool it is asked to wrap.
+     */
+    public Tool tool(String name) {
+        return name == null ? null : tools.get(name);
     }
 
     /** Snapshot of currently-registered addon tools (insertion order). Used by MCP tools/list. */
@@ -259,25 +284,36 @@ public class RequestDispatcher {
             done.accept(null, err);
             return;
         }
+        // Capture the caller's tier here, on the transport thread. Everything downstream runs on
+        // the server thread or a worker, where the ThreadLocal would otherwise read as GUEST.
+        CallTier.Tier tier = CallTier.current();
+        // Let a spatial tool declare its footprint so the approval layer can check build_zones.
+        // Must happen before request(): the decision is made there.
+        try {
+            tool.declareScope(args);
+        } catch (Throwable t) {
+            AgentLinkMod.LOG.debug("agent-link: declareScope failed for {}: {}", toolName, t.toString());
+        }
         AgentToolApproval approval = AgentToolApproval.current();
         if (approval != null) {
             approval.request(toolName, args, session).thenAccept(decision -> {
                 if (!decision.approved()) {
-                    AuditLog.record(toolName, args, decision, false, "APPROVAL_DENIED", decision.reason(), null);
+                    CallTier.with(tier, () -> AuditLog.record(toolName, args, decision, false,
+                            "APPROVAL_DENIED", decision.reason(), null));
                     done.accept(null, new ToolException("APPROVAL_DENIED", decision.reason()));
                     return;
                 }
-                invokeApproved(toolName, args, session, done, tool, decision);
+                invokeApproved(toolName, args, session, done, tool, decision, tier);
             });
             return;
         }
-        invokeApproved(toolName, args, session, done, tool, null);
+        invokeApproved(toolName, args, session, done, tool, null, tier);
     }
 
     private void invokeApproved(String toolName, JsonObject args, ClientSession session,
                                 BiConsumer<JsonObject, ToolException> done, Tool tool,
-                                AgentToolApproval.Decision decision) {
-        mc.execute(() -> {
+                                AgentToolApproval.Decision decision, CallTier.Tier tier) {
+        Runnable body = () -> CallTier.with(tier, () -> {
             try {
                 JsonObject result = tool.invoke(args, session);
                 AuditLog.record(toolName, args, decision, true, null, null, result);
@@ -293,6 +329,23 @@ public class RequestDispatcher {
                 done.accept(null, te);
             }
         });
+
+        if (tool.offThread()) {
+            try {
+                workers.execute(body);
+            } catch (RejectedExecutionException rex) {
+                // Pool is shut down (server stopping). Fall back to the server thread so the call
+                // still gets a structured answer instead of hanging.
+                mc.execute(body);
+            }
+            return;
+        }
+        mc.execute(body);
+    }
+
+    /** Shuts the off-thread worker pool down. Called from the server-stopping hook. */
+    public void shutdownWorkers() {
+        workers.shutdownNow();
     }
 
     /** Helper for tools that need to read a string arg. */
