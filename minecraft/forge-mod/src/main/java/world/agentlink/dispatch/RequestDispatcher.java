@@ -9,9 +9,33 @@ import world.agentlink.approval.AgentToolApproval;
 import world.agentlink.approval.CallTier;
 import world.agentlink.audit.AuditLog;
 import world.agentlink.dispatch.tools.AgentHeartbeatTool;
+import world.agentlink.dispatch.tools.ApplyEffectTool;
 import world.agentlink.dispatch.tools.BroadcastTool;
+import world.agentlink.dispatch.tools.CancelTaskTool;
 import world.agentlink.dispatch.tools.CommandTool;
+import world.agentlink.dispatch.tools.FillBlocksTool;
+import world.agentlink.dispatch.tools.FindBlocksTool;
 import world.agentlink.dispatch.tools.FindPlayersTool;
+import world.agentlink.dispatch.tools.ForceLoadChunksTool;
+import world.agentlink.dispatch.tools.GetNbtTool;
+import world.agentlink.dispatch.tools.GetTaskTool;
+import world.agentlink.dispatch.tools.GiveItemTool;
+import world.agentlink.dispatch.tools.ListSnapshotsTool;
+import world.agentlink.dispatch.tools.ListTasksTool;
+import world.agentlink.dispatch.tools.ModifyEntityTool;
+import world.agentlink.dispatch.tools.RemoveEntitiesTool;
+import world.agentlink.dispatch.tools.RestoreBlockSnapshotTool;
+import world.agentlink.dispatch.tools.SaveWorldTool;
+import world.agentlink.dispatch.tools.SetBlockTool;
+import world.agentlink.dispatch.tools.SetBlocksTool;
+import world.agentlink.dispatch.tools.SetGamemodeTool;
+import world.agentlink.dispatch.tools.SetNbtTool;
+import world.agentlink.dispatch.tools.SetWorldPropertyTool;
+import world.agentlink.dispatch.tools.SpawnEntityTool;
+import world.agentlink.dispatch.tools.StartTaskTool;
+import world.agentlink.dispatch.tools.TeleportTool;
+import world.agentlink.dispatch.tools.UndoBlocksTool;
+import world.agentlink.dispatch.tools.WhoamiTool;
 import world.agentlink.dispatch.tools.GetBiomeTool;
 import world.agentlink.dispatch.tools.GetBlockTool;
 import world.agentlink.dispatch.tools.GetBlocksRegionTool;
@@ -159,6 +183,40 @@ public class RequestDispatcher {
         registerBuiltin(new WeSphereTool(mc));
         registerBuiltin(new WeCylTool(mc));
         registerBuiltin(new WeUndoTool(mc));
+
+        // Async task system (0.5.0) — decouples long operations from a single MCP request.
+        registerBuiltin(new StartTaskTool(mc));
+        registerBuiltin(new GetTaskTool());
+        registerBuiltin(new CancelTaskTool());
+        registerBuiltin(new ListTasksTool());
+
+        // Native block writing (0.5.0) — works without WorldEdit, undoable via undo_blocks.
+        registerBuiltin(new SetBlockTool(mc));
+        registerBuiltin(new FillBlocksTool(mc));
+        registerBuiltin(new SetBlocksTool(mc));
+        registerBuiltin(new UndoBlocksTool(mc));
+        registerBuiltin(new RestoreBlockSnapshotTool(mc));
+        registerBuiltin(new ListSnapshotsTool());
+        registerBuiltin(new FindBlocksTool(mc));
+
+        // NBT read/write (0.5.0) — the general escape hatch for anything unmodelled.
+        registerBuiltin(new GetNbtTool(mc));
+        registerBuiltin(new SetNbtTool(mc));
+
+        // Player / entity / world control (0.5.0).
+        registerBuiltin(new TeleportTool(mc));
+        registerBuiltin(new GiveItemTool(mc));
+        registerBuiltin(new SetGamemodeTool(mc));
+        registerBuiltin(new ApplyEffectTool(mc));
+        registerBuiltin(new SpawnEntityTool(mc));
+        registerBuiltin(new RemoveEntitiesTool(mc));
+        registerBuiltin(new ModifyEntityTool(mc));
+        registerBuiltin(new SetWorldPropertyTool(mc));
+        registerBuiltin(new ForceLoadChunksTool(mc));
+        registerBuiltin(new SaveWorldTool(mc));
+
+        // Self-introspection (0.5.0) — lets the agent learn its own permission boundaries.
+        registerBuiltin(new WhoamiTool(mc));
 
         synchronized (PRE_REGISTERED_LOCK) {
             for (RegisteredEntry entry : PRE_REGISTERED) {

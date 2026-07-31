@@ -42,6 +42,7 @@ public class AgentLinkMod {
         if (cfg.auditEnabled()) {
             AuditLog.start(event.getServer());
         }
+        world.agentlink.task.TaskManager.start(event.getServer());
         server = new AgentLinkServer(event.getServer(), cfg);
         try {
             server.start();
@@ -73,6 +74,9 @@ public class AgentLinkMod {
 
     @SubscribeEvent
     public void onServerStopping(ServerStoppingEvent event) {
+        // Stop accepting work before the world starts tearing down: a task mid-slice would
+        // otherwise keep writing blocks into a level that is being unloaded.
+        world.agentlink.task.TaskManager.stop();
         AgentToolApproval.stopCurrent();
         AuditLog.stop();
         if (mcpServer != null) {
@@ -85,6 +89,7 @@ public class AgentLinkMod {
         if (server != null) {
             try {
                 world.agentlink.dispatch.RequestDispatcher.clearCurrent(server.dispatcher());
+                server.dispatcher().shutdownWorkers();
                 server.shutdown();
             } catch (Exception e) {
                 LOG.warn("agent-link shutdown error", e);
