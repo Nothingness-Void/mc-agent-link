@@ -12,6 +12,7 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraftforge.event.CommandEvent;
 import net.minecraftforge.event.ServerChatEvent;
+import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.event.entity.EntityTravelToDimensionEvent;
 import net.minecraftforge.event.entity.living.LivingDeathEvent;
 import net.minecraftforge.event.entity.living.LivingHurtEvent;
@@ -26,6 +27,7 @@ import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
 import world.agentlink.AgentLinkMod;
 import world.agentlink.config.AgentLinkConfig;
+import world.agentlink.diagnostics.TickIncidentRecorder;
 
 import java.util.function.Supplier;
 
@@ -65,17 +67,33 @@ public class ForgeEventBridge {
         private volatile int suppressed;
     }
 
-    private static void record(String topic, JsonObject data) {
-        EventBuffer.get().append(topic, data);
+    private static EventBuffer.Entry record(String topic, JsonObject data) {
+        JsonObject payload = data == null ? new JsonObject() : data.deepCopy();
+        EventBuffer.Entry entry = EventBuffer.get().append(topic, payload);
         var srv = serverSupplier.get();
         if (srv != null) {
-            EventBroadcaster.emit(srv.sessions(), topic, data);
+            EventBroadcaster.emit(srv.sessions(), topic, payload);
+        }
+        return entry;
+    }
+
+    @SubscribeEvent
+    public static void onServerTick(TickEvent.ServerTickEvent event) {
+        if (event.phase == TickEvent.Phase.START) {
+            TickIncidentRecorder.onTickStart(event.getServer());
+        } else if (event.phase == TickEvent.Phase.END) {
+            TickIncidentRecorder.onTickEnd(event.getServer());
         }
     }
 
     /** Public entry so other subsystems (task completion, for instance) can post an event. */
     public static void post(String topic, JsonObject data) {
         record(topic, data);
+    }
+
+    /** Public entry for API callers that also need the assigned sequence number. */
+    public static EventBuffer.Entry postAndReturn(String topic, JsonObject data) {
+        return record(topic, data);
     }
 
     private static boolean verboseEnabled(String topic) {

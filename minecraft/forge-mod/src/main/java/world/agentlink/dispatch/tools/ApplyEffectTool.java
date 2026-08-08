@@ -2,13 +2,13 @@ package world.agentlink.dispatch.tools;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
-import net.minecraft.core.registries.BuiltInRegistries;
-import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.world.effect.MobEffect;
-import net.minecraft.world.effect.MobEffectInstance;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
+import world.agentlink.api.AgentApiException;
+import world.agentlink.api.AgentEffectApi;
+import world.agentlink.api.AgentLinkApi;
 import world.agentlink.dispatch.Tool;
 import world.agentlink.dispatch.ToolArgs;
 import world.agentlink.dispatch.ToolException;
@@ -27,8 +27,8 @@ import world.agentlink.transport.ClientSession;
 public class ApplyEffectTool implements Tool {
 
     /** Vanilla's own ceiling for /effect durations, in seconds. */
-    private static final int MAX_SECONDS = 1_000_000;
-    private static final int MAX_AMPLIFIER = 255;
+    private static final int MAX_SECONDS = AgentEffectApi.MAX_SECONDS;
+    private static final int MAX_AMPLIFIER = AgentEffectApi.MAX_AMPLIFIER;
 
     private final MinecraftServer mc;
     private final GetNbtTool resolver;
@@ -64,16 +64,15 @@ public class ApplyEffectTool implements Tool {
         if ("clear".equals(mode)) {
             String effectId = ToolArgs.optString(args, "effect", null);
             if (effectId == null || effectId.isBlank()) {
-                int removed = living.getActiveEffects().size();
-                living.removeAllEffects();
+                int removed = clearAll(living);
                 r.addProperty("cleared_all", true);
                 r.addProperty("effects_removed", removed);
             } else {
                 MobEffect effect = resolveEffect(effectId);
                 boolean had = living.hasEffect(effect);
-                living.removeEffect(effect);
+                boolean removed = clear(living, effectId);
                 r.addProperty("effect", effectId);
-                r.addProperty("effects_removed", had ? 1 : 0);
+                r.addProperty("effects_removed", removed ? 1 : 0);
                 if (!had) r.addProperty("note", "That effect was not active.");
             }
             r.add("active_effects", activeEffects(living));
@@ -92,9 +91,7 @@ public class ApplyEffectTool implements Tool {
         boolean showIcon = ToolArgs.optBool(args, "show_icon", true);
 
         // Instant effects (harming, healing) ignore duration; ticks would just be wasted.
-        int ticks = effect.isInstantenous() ? 1 : seconds * 20;
-        boolean applied = living.addEffect(
-                new MobEffectInstance(effect, ticks, amplifier, ambient, showParticles, showIcon));
+        boolean applied = apply(living, effectId, seconds, amplifier, ambient, showParticles, showIcon);
 
         r.addProperty("effect", effectId);
         r.addProperty("seconds", effect.isInstantenous() ? 0 : seconds);
@@ -109,29 +106,56 @@ public class ApplyEffectTool implements Tool {
         return r;
     }
 
-    private static JsonArray activeEffects(LivingEntity living) {
+    private static JsonArray activeEffects(LivingEntity living) throws ToolException {
         JsonArray arr = new JsonArray();
-        for (MobEffectInstance inst : living.getActiveEffects()) {
-            JsonObject o = new JsonObject();
-            ResourceLocation id = BuiltInRegistries.MOB_EFFECT.getKey(inst.getEffect());
-            o.addProperty("effect", id == null ? "unknown" : id.toString());
-            o.addProperty("amplifier", inst.getAmplifier());
-            o.addProperty("duration_ticks", inst.getDuration());
-            o.addProperty("duration_seconds", inst.getDuration() / 20);
-            arr.add(o);
+        try {
+            for (AgentEffectApi.EffectState state : AgentLinkApi.effects().active(living)) {
+                JsonObject o = new JsonObject();
+                o.addProperty("effect", state.id());
+                o.addProperty("amplifier", state.amplifier());
+                o.addProperty("duration_ticks", state.durationTicks());
+                o.addProperty("duration_seconds", state.durationTicks() / 20);
+                arr.add(o);
+            }
+        } catch (AgentApiException ex) {
+            throw new ToolException(ex.code(), ex.getMessage());
         }
         return arr;
     }
 
     private MobEffect resolveEffect(String id) throws ToolException {
-        ResourceLocation rl = ResourceLocation.tryParse(id.trim());
-        if (rl == null) throw new ToolException("INVALID_ARGS", "Invalid effect id: " + id);
-        MobEffect effect = BuiltInRegistries.MOB_EFFECT.get(rl);
-        if (effect == null) {
-            throw new ToolException("INVALID_ARGS",
-                    "Unknown effect: " + id + " (e.g. minecraft:night_vision, minecraft:fire_resistance)");
+        try {
+            return AgentLinkApi.effects().resolve(id);
+        } catch (AgentApiException ex) {
+            throw new ToolException(ex.code(), ex.getMessage());
         }
-        return effect;
+    }
+
+    private static boolean apply(LivingEntity entity, String effectId, int seconds, int amplifier,
+                                 boolean ambient, boolean showParticles, boolean showIcon)
+            throws ToolException {
+        try {
+            return AgentLinkApi.effects().apply(entity, effectId, seconds, amplifier,
+                    ambient, showParticles, showIcon);
+        } catch (AgentApiException ex) {
+            throw new ToolException(ex.code(), ex.getMessage());
+        }
+    }
+
+    private static boolean clear(LivingEntity entity, String effectId) throws ToolException {
+        try {
+            return AgentLinkApi.effects().clear(entity, effectId);
+        } catch (AgentApiException ex) {
+            throw new ToolException(ex.code(), ex.getMessage());
+        }
+    }
+
+    private static int clearAll(LivingEntity entity) throws ToolException {
+        try {
+            return AgentLinkApi.effects().clearAll(entity);
+        } catch (AgentApiException ex) {
+            throw new ToolException(ex.code(), ex.getMessage());
+        }
     }
 
     private Entity resolveSubject(JsonObject args) throws ToolException {

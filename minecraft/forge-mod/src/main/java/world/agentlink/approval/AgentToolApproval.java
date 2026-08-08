@@ -34,7 +34,12 @@ public final class AgentToolApproval {
     private static final AtomicLong NEXT_ID = new AtomicLong(1);
     private static final Set<String> NEVER_TRUST_TOOLS = Set.of(
             "run_console_command", "write_config_file", "broadcast",
-            "spark_profiler_start", "spark_profiler_stop", "spark_profiler_cancel"
+            "spark_profiler_start", "spark_profiler_stop", "spark_profiler_cancel",
+            // The structured operator tools combine several irreversible actions behind one name.
+            // Keep them approval-gated even if an operator previously trusted another tool.
+            "manage_players", "manage_player_inventory", "manage_scoreboard", "control_entity",
+            "set_world_spawn", "set_world_border", "server_control", "manage_container",
+            "set_player_state", "manage_player_progression", "manage_datapacks"
     );
     /**
      * Tools whose own approval flow can be skipped entirely if the operator pinned a parameter
@@ -114,11 +119,14 @@ public final class AgentToolApproval {
             return CompletableFuture.completedFuture(Decision.outcome(Outcome.CONSOLE_TRUSTED, "console-tier token"));
         }
         String normalizedTool = normalizeTool(toolName);
-        if (isAutoAllowed(normalizedTool)) {
+        // admin_only_tools is a security boundary, not just a prompt-display hint. A stale or
+        // overly broad auto_allow/trusted rule must not silently downgrade it for guest tokens.
+        boolean adminOnly = isAdminOnly(normalizedTool);
+        if (!adminOnly && isAutoAllowed(normalizedTool)) {
             AgentLinkMod.LOG.info("agent-link approval bypassed for tool {}: auto-allowed", toolName);
             return CompletableFuture.completedFuture(Decision.outcome(Outcome.AUTO_ALLOW, "auto allowed"));
         }
-        TrustRule trustHit = matchTrusted(normalizedTool, args);
+        TrustRule trustHit = adminOnly ? null : matchTrusted(normalizedTool, args);
         if (trustHit != null) {
             AgentLinkMod.LOG.info("agent-link approval bypassed for tool {}: trusted by rule {}", toolName, trustHit);
             return CompletableFuture.completedFuture(Decision.trustedRule(trustHit));
@@ -131,10 +139,9 @@ public final class AgentToolApproval {
         }
 
         // admin_only_tools narrows WHO sees the button (admin-only) when admins are configured.
-        // When admin_uuids is empty, role-tiering is disabled and every OP can approve every tool —
+        // Assigned admins and OPs can approve ordinary prompts. When admin_uuids is empty, role-tiering is disabled and every OP can approve every tool —
         // legacy behavior; never short-circuit to a hard deny, otherwise non-admin servers lose the
         // ability to approve anything.
-        boolean adminOnly = isAdminOnly(normalizedTool);
         ArrayList<ServerPlayer> ops = onlineApprovers(adminOnly);
         if (ops.isEmpty()) {
             java.util.List<java.util.UUID> admins = cfg.roleAdminUuids();
@@ -325,13 +332,12 @@ public final class AgentToolApproval {
 
     private CommandResult authorizeActor(PendingApproval approval, java.util.UUID actorUuid, boolean hasOpPermission, boolean console) {
         if (console) return new CommandResult(true, "ok");
+        boolean admin = actorUuid != null && adminsConfigured() && cfg.roleAdminUuids().contains(actorUuid);
+        if (admin) return new CommandResult(true, "ok");
         if (!hasOpPermission) {
             return new CommandResult(false, AgentLinkLang.tr("agentlink.approval.require_op", approval.toolName()));
         }
         if (approval.adminOnly() && adminsConfigured()) {
-            if (actorUuid != null && cfg.roleAdminUuids().contains(actorUuid)) {
-                return new CommandResult(true, "ok");
-            }
             return new CommandResult(false, AgentLinkLang.tr("agentlink.approval.require_admin", approval.toolName()));
         }
         return new CommandResult(true, "ok");
@@ -346,12 +352,15 @@ public final class AgentToolApproval {
         if (adminOnly && adminsConfigured()) {
             java.util.List<java.util.UUID> admins = cfg.roleAdminUuids();
             for (ServerPlayer player : mc.getPlayerList().getPlayers()) {
-                if (player.hasPermissions(2) && admins.contains(player.getUUID())) out.add(player);
+                if (admins.contains(player.getUUID())) out.add(player);
             }
             return out;
         }
         for (ServerPlayer player : mc.getPlayerList().getPlayers()) {
-            if (player.hasPermissions(2)) out.add(player);
+            if (player.hasPermissions(2)
+                    || (adminsConfigured() && cfg.roleAdminUuids().contains(player.getUUID()))) {
+                out.add(player);
+            }
         }
         return out;
     }

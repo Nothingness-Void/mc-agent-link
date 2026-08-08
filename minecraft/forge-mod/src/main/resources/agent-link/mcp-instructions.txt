@@ -76,11 +76,22 @@ sliced task is faster and produces one undo entry instead of dozens.
   model — enchantments, villager trades, spawner contents, modded block-entity
   internals.
 - **Player & entity control**: `teleport`, `give_item`, `set_gamemode`,
-  `apply_effect`, `spawn_entity`, `remove_entities`, `modify_entity`.
-- **World control**: `set_world_property` (time / weather / difficulty /
-  gamerule), `force_load_chunks`, `save_world`.
+  `apply_effect`, `spawn_entity`, `remove_entities`, `modify_entity`,
+  `manage_players`, `manage_player_inventory`, `control_entity`.
+- **World and server control**: `set_world_property` (time / weather /
+  difficulty / gamerule), `set_world_spawn`, `set_world_border`,
+  `force_load_chunks`, `save_world`, `server_control`.
+- **Scoreboard**: `get_scoreboard` and `manage_scoreboard` for objectives,
+  scores, display slots, teams, and membership.
+- **Containers and player data**: `manage_container`, `set_player_state`,
+  and `manage_player_progression` for container slots, vitals/XP/abilities,
+  recipes, and advancement criteria.
+- **Data packs**: `manage_datapacks` lists and selects packs, then reloads the
+  selected resources without pretending that a JVM/mod restart happened.
 - **Async**: `start_task`, `get_task`, `cancel_task`, `list_tasks`.
-- **Diagnosis**: `tick_profile`, `thread_dump`, `list_mods`.
+ - **Diagnosis**: start with `server_diagnose` for one bounded health snapshot and candidate signals;
+   it has a total budget (default 12s, `timeout_ms` 1--30s) and marks timed-out components;
+  use `tick_profile`, `tick_incidents`, `thread_dump`, `list_mods`, and `read_server_file` for focused follow-up.
 - **Spark** (only if installed — call `spark_status` first): `spark_stats`,
   `spark_profiler_start` / `_stop` / `_cancel`, `spark_health_report`.
 - **WorldEdit** (only if installed — call `we_status` first): `we_set`,
@@ -89,7 +100,8 @@ sliced task is faster and produces one undo entry instead of dozens.
 - **Filesystem (sandboxed)**: `list_dir`, `read_server_file`, `read_config`,
   `write_config_file` (gated by the operator's `write_allow` / `write_deny`
   globs; default permits only `config/**`, and existing files are auto-backed-up
-  under `config/.agent-link-backup/`).
+   under `config/.agent-link-backup/`). Guest reads redact tokens, pair codes,
+   and operator identities; use a console-tier token for the original text.
 
 # Building — recommended approach
 
@@ -120,7 +132,10 @@ blob — it is dramatically cheaper.
 - `run_console_command` runs at op level 4. Treat it like a root shell. Do not
   run `stop`, `/op`, `/deop`, `/ban`, or destructive world commands without
   explicit user confirmation. Prefer the structured tool where one exists: it
-  needs a narrower permission and returns a parseable result.
+  needs a narrower permission and returns a parseable result. The structured
+  `server_control` stop action requires `confirmed:true`; `control_entity`
+  kill/discard requires `confirmed:true`, and player targets additionally need
+  `allow_player:true`.
 - `remove_entities` without a `types` / `categories` filter defaults to a
   preview. Read `counts_by_type`, confirm it is what you meant, then re-issue
   with `dry_run:false`. It will never remove players.
@@ -138,19 +153,30 @@ blob — it is dramatically cheaper.
 
 # Diagnosing lag — recommended loop
 
-1. `tick_profile` — is the average fine but p99 bad? That is a spike, not load.
-2. `thread_dump` — what was `Server thread` doing when sampled?
-3. `spark_status`; if present, `spark_profiler_start` (set `timeout: 30` for
+1. `server_diagnose` — collect the bounded snapshot first; inspect `complete` and
+   timed-out components, then use its `diagnosis.findings` as candidate signals,
+   not proof of root cause.
+2. `tick_profile` — is the average fine but p99 bad? That is a spike, not load.
+3. `tick_incidents` — did recent ticks cross 50 ms repeatedly? It is timing evidence,
+   not causal attribution, and is coalesced to keep overhead bounded.
+4. `thread_dump` — what was `Server thread` doing when sampled?
+5. `spark_status`; if present, `spark_profiler_start` (set `timeout: 30` for
    hands-off auto-stop), then read the viewer URL from the stop response.
-4. `list_mods` to map a hot package or stack frame back to a mod id.
-5. `read_server_file` on that mod's config, `write_config_file` to tune it, then
+6. `list_mods` to map a hot package or stack frame back to a mod id.
+7. `read_server_file` on that mod's config, `write_config_file` to tune it, then
    ask the operator to reload or restart — do NOT restart on your own.
-6. Entity or item pile-ups: `list_entities_near`, then `remove_entities`.
+8. Entity or item pile-ups: `list_entities_near`, then `remove_entities`.
 
 # Investigating a crash or an incident
 
-Crash reports live under `crash-reports/`: `list_dir` then `read_server_file` on
-the newest `.txt`, paired with `list_mods` and `get_recent_logs`.
+Call `server_diagnose` first. It reports the newest crash-report path, timestamp,
+summary and key `Caused by` / suspected-mod lines without uploading or starting
+a profiler. Then use `read_server_file` on the returned path for the full report,
+paired with `list_mods` and `get_recent_logs`.
+
+If the JVM has already exited, the in-process mod cannot answer. Use the repository's
+external `tools/agent-link-watchdog.ps1` to capture `latest.log`, debug/JVM crash artifacts,
+and the newest crash report after the process exits.
 
 For "who did this", pull `get_recent_events` with the `command`,
 `container_open`, `explosion` and `block_break` topics, and cross-reference the

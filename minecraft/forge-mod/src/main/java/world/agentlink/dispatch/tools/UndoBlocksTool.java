@@ -46,6 +46,17 @@ public class UndoBlocksTool implements Tool {
             throw new ToolException("INVALID_ARGS", "mode must be \"undo\" or \"list\"");
         }
 
+        String operationId = ToolArgs.optString(args, "operation_id", "").trim();
+        if (!operationId.isEmpty()) {
+            BlockWriter.OperationUndoResult result = BlockWriter.undoOperation(operationId);
+            JsonObject r = new JsonObject();
+            r.addProperty("operation_id", result.operationId());
+            r.addProperty("label", result.label());
+            r.addProperty("blocks_restored", result.blocksRestored());
+            r.addProperty("remaining_depth", result.remainingDepth());
+            return r;
+        }
+
         int steps = ToolArgs.optIntClamped(args, "steps", 1, 1, MAX_STEPS);
         if (BlockWriter.undoDepth() == 0) {
             throw new ToolException("NOTHING_TO_UNDO",
@@ -73,6 +84,7 @@ public class UndoBlocksTool implements Tool {
         for (BlockWriter.Change c : changes) {
             JsonObject o = new JsonObject();
             o.addProperty("index", i++);
+            o.addProperty("operation_id", c.operationId());
             o.addProperty("label", c.label());
             o.addProperty("dim", c.dimension());
             o.addProperty("blocks_recorded", c.size());
@@ -88,7 +100,7 @@ public class UndoBlocksTool implements Tool {
         JsonObject r = new JsonObject();
         r.addProperty("depth", changes.size());
         r.add("stack", arr);
-        r.addProperty("note", "index 0 is the most recent; undo_blocks{steps:N} reverses the first N");
+        r.addProperty("note", "index 0 is the most recent; use operation_id for an exact newest edit");
         return r;
     }
 }

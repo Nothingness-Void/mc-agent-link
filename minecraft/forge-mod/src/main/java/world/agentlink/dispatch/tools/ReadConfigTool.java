@@ -6,7 +6,9 @@ import net.minecraft.server.MinecraftServer;
 import world.agentlink.dispatch.RequestDispatcher;
 import world.agentlink.dispatch.Tool;
 import world.agentlink.dispatch.ToolException;
+import world.agentlink.approval.CallTier;
 import world.agentlink.transport.ClientSession;
+import world.agentlink.security.SensitiveDataRedactor;
 
 import java.io.IOException;
 import java.nio.charset.CharacterCodingException;
@@ -97,10 +99,13 @@ public class ReadConfigTool implements Tool {
             String text = StandardCharsets.UTF_8.newDecoder()
                     .decode(java.nio.ByteBuffer.wrap(buf)).toString();
             r.addProperty("encoding", "utf-8");
-            r.addProperty("content", text);
+            String safe = SensitiveDataRedactor.config(name, text, CallTier.is(CallTier.Tier.CONSOLE));
+            r.addProperty("content", safe);
+            r.addProperty("redacted", !safe.equals(text));
         } catch (CharacterCodingException ex) {
             r.addProperty("encoding", "base64");
             r.addProperty("content", Base64.getEncoder().encodeToString(buf));
+            r.addProperty("redacted", false);
         }
         return r;
     }

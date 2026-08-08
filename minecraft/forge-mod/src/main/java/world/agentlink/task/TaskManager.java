@@ -1,6 +1,7 @@
 package world.agentlink.task;
 
 import com.google.gson.Gson;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import net.minecraft.server.MinecraftServer;
 import world.agentlink.AgentLinkMod;
@@ -65,6 +66,8 @@ public final class TaskManager {
     private final ExecutorService pool;
     private final Map<String, TaskRecord> records = new ConcurrentHashMap<>();
     private final AtomicLong seq = new AtomicLong(1);
+    private final Object lifecycleLock = new Object();
+    private volatile boolean stopping;
 
     private TaskManager(MinecraftServer mc, Path dir, int concurrency) {
         this.mc = mc;
@@ -89,6 +92,7 @@ public final class TaskManager {
         } catch (Exception e) {
             AgentLinkMod.LOG.warn("agent-link tasks: cannot create {}: {}", dir, e.getMessage());
         }
+        tm.loadHistory();
         CURRENT = tm;
         AgentLinkMod.LOG.info("agent-link tasks: ready (max_concurrent={}, dir={})", concurrency, dir);
     }
@@ -97,16 +101,17 @@ public final class TaskManager {
         TaskManager cur = CURRENT;
         CURRENT = null;
         if (cur == null) return;
-        // Ask running tasks to stop cooperatively, then drop the pool. We don't wait long: the
-        // server is going down and a slice boundary arrives within a tick or two.
-        for (TaskRecord r : cur.records.values()) {
-            if (r.status == Status.RUNNING || r.status == Status.PENDING) {
-                r.cancelRequested = true;
-                r.finish(Status.CANCELLED, null, "server stopping");
-                cur.persist(r);
+        synchronized (cur.lifecycleLock) {
+            cur.stopping = true;
+            // Ask running tasks to stop cooperatively, then drop the pool. We don't wait long: the
+            // server is going down and a slice boundary arrives within a tick or two.
+            for (TaskRecord r : cur.records.values()) {
+                if (r.markServerStopping()) {
+                    cur.persist(r);
+                }
             }
+            cur.pool.shutdownNow();
         }
-        cur.pool.shutdownNow();
     }
 
     public static TaskManager current() {
@@ -135,6 +140,7 @@ public final class TaskManager {
         private final JsonObject args;
         private final long createdAtMs;
         private final CallTier.Tier tier;
+        private final boolean historical;
 
         private volatile Status status = Status.PENDING;
         private volatile boolean cancelRequested;
@@ -150,17 +156,63 @@ public final class TaskManager {
         private volatile Future<?> future;
 
         TaskRecord(String id, String toolName, JsonObject args, CallTier.Tier tier) {
+            this(id, toolName, args, tier, false, System.currentTimeMillis());
+        }
+
+        private TaskRecord(String id, String toolName, JsonObject args, CallTier.Tier tier,
+                           boolean historical, long createdAtMs) {
             this.id = id;
             this.toolName = toolName;
             this.args = args;
             this.tier = tier;
-            this.createdAtMs = System.currentTimeMillis();
+            this.historical = historical;
+            this.createdAtMs = createdAtMs;
         }
 
         public String id() { return id; }
         public String toolName() { return toolName; }
         public Status status() { return status; }
         public boolean cancelRequested() { return cancelRequested; }
+
+        /** Claim the record for its worker. A canceled/terminal record must never start late. */
+        synchronized boolean begin() {
+            if (status.terminal() || cancelRequested) return false;
+            startedAtMs = System.currentTimeMillis();
+            status = Status.RUNNING;
+            return true;
+        }
+
+        /** Attach a future after submit; close the submit/cancel race for a still-pending record. */
+        synchronized void attachFuture(Future<?> next) {
+            future = next;
+            if (status == Status.CANCELLED) next.cancel(false);
+        }
+
+        /**
+         * Request cancellation without interrupting a body that may currently be mutating the
+         * world. A task which has not claimed its worker slot can be terminal immediately.
+         */
+        synchronized boolean requestCancel(String reason) {
+            if (status.terminal()) return false;
+            cancelRequested = true;
+            if (status == Status.PENDING) {
+                Future<?> f = future;
+                finishLocked(Status.CANCELLED, null,
+                        reason == null ? "cancelled before start" : reason);
+                if (f != null) f.cancel(false);
+            }
+            return true;
+        }
+
+        /** Mark non-terminal work as interrupted by shutdown; never allow a late worker to revive it. */
+        synchronized boolean markServerStopping() {
+            if (status.terminal()) return false;
+            boolean pending = status == Status.PENDING;
+            cancelRequested = true;
+            finishLocked(Status.CANCELLED, null, "server stopping");
+            if (pending && future != null) future.cancel(false);
+            return true;
+        }
 
         void updateProgress(long done, long total, String message) {
             if (done >= 0) this.progressDone = done;
@@ -176,20 +228,78 @@ public final class TaskManager {
             this.partial = p == null ? null : p.deepCopy();
         }
 
-        void finish(Status s, JsonObject result, String note) {
+        synchronized void finish(Status s, JsonObject result, String note) {
             if (this.status.terminal()) return;
+            finishLocked(s, result, note);
+        }
+
+        private void finishLocked(Status s, JsonObject result, String note) {
             this.status = s;
-            this.result = result;
+            this.result = s == Status.CANCELLED ? null : result;
             this.finishedAtMs = System.currentTimeMillis();
             if (note != null && this.progressMessage.isEmpty()) this.progressMessage = note;
         }
 
-        void fail(String code, String message) {
+        synchronized void fail(String code, String message) {
             if (this.status.terminal()) return;
             this.status = Status.FAILED;
             this.errorCode = code;
             this.errorMessage = message;
             this.finishedAtMs = System.currentTimeMillis();
+        }
+
+        /** Rehydrate a record for inspection only. Persisted non-terminal work is never resumed. */
+        static TaskRecord fromPersisted(JsonObject o) {
+            String id = TaskManager.string(o, "task_id", "");
+            if (id.isEmpty()) return null;
+
+            String rawTier = TaskManager.string(o, "tier", "guest");
+            CallTier.Tier tier;
+            try {
+                tier = CallTier.Tier.valueOf(rawTier.toUpperCase(Locale.ROOT));
+            } catch (IllegalArgumentException ignored) {
+                tier = CallTier.Tier.GUEST;
+            }
+
+            TaskRecord record = new TaskRecord(
+                    id,
+                    TaskManager.string(o, "tool", "unknown"),
+                    new JsonObject(),
+                    tier,
+                    true,
+                    TaskManager.number(o, "created_at_ms", System.currentTimeMillis()));
+            String rawStatus = TaskManager.string(o, "status", "failed");
+            try {
+                record.status = Status.valueOf(rawStatus.toUpperCase(Locale.ROOT));
+            } catch (IllegalArgumentException ignored) {
+                record.status = Status.FAILED;
+            }
+            record.cancelRequested = TaskManager.bool(o, "cancel_requested", false);
+            record.startedAtMs = TaskManager.number(o, "started_at_ms", 0L);
+            record.finishedAtMs = TaskManager.number(o, "finished_at_ms", 0L);
+
+            JsonObject progress = TaskManager.object(o, "progress");
+            if (progress != null) {
+                record.progressDone = TaskManager.number(progress, "done", -1L);
+                record.progressTotal = TaskManager.number(progress, "total", -1L);
+                record.progressMessage = TaskManager.string(progress, "message", "");
+            }
+            record.partial = TaskManager.object(o, "partial");
+            record.result = TaskManager.object(o, "result");
+            JsonObject error = TaskManager.object(o, "error");
+            if (error != null) {
+                record.errorCode = TaskManager.string(error, "code", null);
+                record.errorMessage = TaskManager.string(error, "message", null);
+            }
+
+            if (!record.status.terminal()) {
+                record.cancelRequested = true;
+                record.status = Status.FAILED;
+                record.errorCode = "SERVER_RESTARTED";
+                record.errorMessage = "Task was interrupted by a server restart and was not resumed.";
+                record.finishedAtMs = System.currentTimeMillis();
+            }
+            return record;
         }
 
         /**
@@ -212,6 +322,7 @@ public final class TaskManager {
                 o.addProperty("running_for_ms", System.currentTimeMillis() - startedAtMs);
             }
             o.addProperty("cancel_requested", cancelRequested);
+            if (historical) o.addProperty("historical", true);
             if (tier != null) o.addProperty("tier", tier.name().toLowerCase(Locale.ROOT));
 
             JsonObject progress = new JsonObject();
@@ -247,26 +358,37 @@ public final class TaskManager {
      * a permission check.
      */
     public TaskRecord submit(Tool tool, JsonObject args, ClientSession session) throws ToolException {
-        String id = "task-" + Long.toString(System.currentTimeMillis(), 36) + "-" + seq.getAndIncrement();
-        TaskRecord record = new TaskRecord(id, tool.name(),
-                args == null ? new JsonObject() : args.deepCopy(), CallTier.current());
-        prune();
-        records.put(id, record);
+        synchronized (lifecycleLock) {
+            if (stopping) throw new ToolException("SERVER_STOPPING", "Task executor is shutting down");
 
-        CallTier.Tier tier = CallTier.current();
-        try {
-            Future<?> f = pool.submit(() -> CallTier.with(tier, () -> runBody(tool, record, session)));
-            record.future = f;
-        } catch (RejectedExecutionException rex) {
-            record.fail("SERVER_STOPPING", "Task executor is shutting down");
-            throw new ToolException("SERVER_STOPPING", "Task executor is shutting down");
+            String id = "task-" + Long.toString(System.currentTimeMillis(), 36) + "-" + seq.getAndIncrement();
+            TaskRecord record = new TaskRecord(id, tool.name(),
+                    args == null ? new JsonObject() : args.deepCopy(), CallTier.current());
+            prune();
+            records.put(id, record);
+            // Persist PENDING before handing it to the executor. A hard JVM exit can now be diagnosed
+            // after restart instead of silently losing the task that was in flight.
+            persist(record);
+
+            CallTier.Tier tier = CallTier.current();
+            try {
+                Future<?> f = pool.submit(() -> CallTier.with(tier, () -> runBody(tool, record, session)));
+                record.attachFuture(f);
+            } catch (RejectedExecutionException rex) {
+                record.fail("SERVER_STOPPING", "Task executor is shutting down");
+                persist(record);
+                throw new ToolException("SERVER_STOPPING", "Task executor is shutting down");
+            }
+            return record;
         }
-        return record;
     }
 
     private void runBody(Tool tool, TaskRecord record, ClientSession session) {
-        record.startedAtMs = System.currentTimeMillis();
-        record.status = Status.RUNNING;
+        if (!record.begin()) {
+            persist(record);
+            return;
+        }
+        persist(record);
         JsonObject args = record.args;
         try {
             JsonObject result;
@@ -288,7 +410,7 @@ public final class TaskManager {
                         () -> tool.invoke(args, session));
             }
             if (record.cancelRequested) {
-                record.finish(Status.CANCELLED, result, "cancelled after completion");
+                record.finish(Status.CANCELLED, null, "cancelled after completion");
             } else {
                 record.finish(Status.SUCCEEDED, result, null);
             }
@@ -340,16 +462,46 @@ public final class TaskManager {
      */
     public boolean cancel(String id) {
         TaskRecord r = get(id);
-        if (r == null || r.status.terminal()) return false;
-        r.cancelRequested = true;
-        if (r.status == Status.PENDING) {
-            // Never started: safe to drop outright.
-            Future<?> f = r.future;
-            if (f != null) f.cancel(false);
-            r.finish(Status.CANCELLED, null, "cancelled before start");
+        if (r == null || !r.requestCancel("cancelled before start")) return false;
+        if (r.status() == Status.CANCELLED) {
             persist(r);
         }
         return true;
+    }
+
+    // ------------------------------------------------------------------ history
+
+    /** Load prior records as read-only history; never resume a write operation after a restart. */
+    private void loadHistory() {
+        if (!Files.isDirectory(dir)) return;
+        try (var stream = Files.list(dir)) {
+            stream.filter(Files::isRegularFile)
+                    .filter(p -> p.getFileName().toString().endsWith(".json"))
+                    .sorted(Comparator.comparingLong(TaskManager::lastModified).reversed())
+                    .limit(MAX_RECORDS)
+                    .forEach(path -> {
+                        try {
+                            JsonElement parsed = com.google.gson.JsonParser.parseString(
+                                    Files.readString(path, StandardCharsets.UTF_8));
+                            if (!parsed.isJsonObject()) return;
+                            TaskRecord record = TaskRecord.fromPersisted(parsed.getAsJsonObject());
+                            if (record != null) records.put(record.id(), record);
+                        } catch (Exception e) {
+                            AgentLinkMod.LOG.debug("agent-link tasks: ignoring history {}: {}",
+                                    path.getFileName(), e.getMessage());
+                        }
+                    });
+        } catch (Exception e) {
+            AgentLinkMod.LOG.warn("agent-link tasks: cannot load history: {}", e.getMessage());
+        }
+    }
+
+    private static long lastModified(Path path) {
+        try {
+            return Files.getLastModifiedTime(path).toMillis();
+        } catch (Exception ignored) {
+            return 0L;
+        }
     }
 
     // ------------------------------------------------------------------ persistence
@@ -362,7 +514,11 @@ public final class TaskManager {
             JsonObject o = record.toJson(true);
             o.addProperty("v", 1);
             Files.writeString(tmp, GSON.toJson(o), StandardCharsets.UTF_8);
-            Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+            try {
+                Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+            } catch (java.nio.file.AtomicMoveNotSupportedException e) {
+                Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING);
+            }
         } catch (Exception e) {
             AgentLinkMod.LOG.debug("agent-link tasks: persist failed for {}: {}", record.id(), e.getMessage());
         }
@@ -380,5 +536,25 @@ public final class TaskManager {
         for (int i = 0; i < toDrop && i < terminal.size(); i++) {
             records.remove(terminal.get(i).id());
         }
+    }
+
+    private static String string(JsonObject object, String key, String fallback) {
+        if (object == null || !object.has(key) || object.get(key).isJsonNull()) return fallback;
+        try { return object.get(key).getAsString(); } catch (RuntimeException ignored) { return fallback; }
+    }
+
+    private static long number(JsonObject object, String key, long fallback) {
+        if (object == null || !object.has(key) || object.get(key).isJsonNull()) return fallback;
+        try { return object.get(key).getAsLong(); } catch (RuntimeException ignored) { return fallback; }
+    }
+
+    private static boolean bool(JsonObject object, String key, boolean fallback) {
+        if (object == null || !object.has(key) || object.get(key).isJsonNull()) return fallback;
+        try { return object.get(key).getAsBoolean(); } catch (RuntimeException ignored) { return fallback; }
+    }
+
+    private static JsonObject object(JsonObject object, String key) {
+        return object != null && object.has(key) && object.get(key).isJsonObject()
+                ? object.getAsJsonObject(key) : null;
     }
 }

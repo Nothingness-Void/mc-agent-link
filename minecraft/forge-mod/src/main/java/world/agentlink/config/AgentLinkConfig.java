@@ -53,7 +53,7 @@ public final class AgentLinkConfig {
      * Schema generation of the approval tables. Bumped whenever a release adds tools that need to be
      * merged into an already-written {@code agent-link.toml} — see {@link #TIER_MIGRATIONS}.
      */
-    private static final int APPROVAL_TABLE_VERSION = 1;
+    private static final int APPROVAL_TABLE_VERSION = 3;
 
     /**
      * Per-release deltas applied to a config written by an older version.
@@ -80,7 +80,16 @@ public final class AgentLinkConfig {
                             "restore_block_snapshot", "set_nbt",
                             "teleport", "give_item", "set_gamemode", "apply_effect",
                             "spawn_entity", "remove_entities", "modify_entity",
-                            "set_world_property", "force_load_chunks", "save_world")));
+                            "set_world_property", "force_load_chunks", "save_world")),
+            new TierMigration(2,
+                    List.of(),
+                    List.of("manage_players", "manage_player_inventory", "manage_scoreboard",
+                            "control_entity", "set_world_spawn", "set_world_border", "server_control",
+                            "manage_container", "set_player_state", "manage_player_progression",
+                            "manage_datapacks")),
+            new TierMigration(3,
+                    List.of("server_diagnose"),
+                    List.of()));
 
     private static final String FILE_NAME = "agent-link.toml";
     private static final List<String> DEFAULT_WRITE_ALLOW = List.of("config/**");
@@ -89,7 +98,7 @@ public final class AgentLinkConfig {
             List.of("null", "http://localhost", "http://127.0.0.1");
     private static final List<String> DEFAULT_APPROVAL_AUTO_ALLOW_TOOLS = List.of(
             // Protocol / queue layer.
-            "ping", "agent_heartbeat", "get_agent_requests",
+            "ping", "agent_heartbeat", "get_agent_requests", "server_diagnose",
             "update_agent_request_status", "reply_agent_request",
             // Read-only world / server state — safe for "ordinary OP" use.
             "list_online_players", "get_player_info", "get_player_inventory",
@@ -133,7 +142,11 @@ public final class AgentLinkConfig {
             // Player / entity / world state mutation.
             "teleport", "give_item", "set_gamemode", "apply_effect",
             "spawn_entity", "remove_entities", "modify_entity",
-            "set_world_property", "force_load_chunks", "save_world"
+            "set_world_property", "force_load_chunks", "save_world",
+            // 0.5.0 structured operator controls.
+            "manage_players", "manage_player_inventory", "manage_scoreboard", "control_entity",
+            "set_world_spawn", "set_world_border", "server_control", "manage_container",
+            "set_player_state", "manage_player_progression", "manage_datapacks"
     );
     private static final List<String> DEFAULT_AUDIT_REDACT_ARGS = List.of(
             // Console payload often contains tokens, op-set commands, /seed output, etc.
@@ -274,7 +287,7 @@ public final class AgentLinkConfig {
             cfg.set("approval.auto_allow_tools", approvalAutoAllowTools);
             cfg.setComment("approval.auto_allow_tools",
                     "\n Tier 1: tools that bypass in-game approval entirely. Default = read-only world / server / log / spark-status\n" +
-                    " inspection that ordinary OPs already have access to in vanilla. Add \"*\" only if you trust the MCP host fully.");
+                    " inspection that in-game admins and OPs already have access to. Add \"*\" only if you trust the MCP host fully.");
             cfg.set("approval.trusted_tools", approvalTrustedTools);
             cfg.setComment("approval.trusted_tools",
                     "\n Tier 2: rules trusted via the in-game [始终允许该工具] / [始终允许该命令] buttons.\n" +
@@ -289,12 +302,13 @@ public final class AgentLinkConfig {
                     " (no approval prompt sent). Default covers anything that mutates the server, runs console commands, or reads sensitive\n" +
                     " filesystem state (read_server_file / list_dir can leak ops.json or this very token file).\n" +
                     " Tools NOT in any of these three lists fall through to Tier 3: still gated by an in-game approval prompt that any\n" +
-                    " admin / OP can click.");
+                    " assigned admin / OP can click.");
 
             cfg.set("roles.admin_uuids", uuidsAsStrings(roleAdminUuids));
             cfg.setComment("roles.admin_uuids",
-                    "\n Server admins (\"腐竹\"). Player UUIDs listed here are the only ones who can click [允许一次]/[拒绝]\n" +
-                    " on in-game MCP tool approval prompts AND the only ones who may invoke approval.admin_only_tools.\n" +
+                    "\n Server admins (\"腐竹\"). Player UUIDs listed here are assigned the in-game ADMIN role. They may use\n" +
+                    " the Agent command/GUI and are the only ones who may invoke approval.admin_only_tools. They may approve\n" +
+                    " MCP prompts even if they are not OP.\n" +
                     " Empty list = fall back to ALL online OPs (legacy behavior; admin_only_tools cannot be enforced and will be denied for everyone).");
             cfg.set("roles.guest_uuids", uuidsAsStrings(roleGuestUuids));
             cfg.setComment("roles.guest_uuids",

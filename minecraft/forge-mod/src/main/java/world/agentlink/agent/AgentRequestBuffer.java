@@ -9,19 +9,40 @@ import net.minecraft.server.level.ServerPlayer;
 import world.agentlink.i18n.AgentLinkLang;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicLong;
 
 public final class AgentRequestBuffer {
+
+    /** Raised instead of evicting a pending/working request when the bounded ring is saturated. */
+    public static final class QueueFullException extends IllegalStateException {
+        public QueueFullException(int capacity) {
+            super("request queue is full (" + capacity + " non-terminal entries)");
+        }
+    }
 
     public enum Status {
         PENDING,
         WORKING,
         DONE,
         FAILED,
-        CANCELED
+        CANCELED;
+
+        public boolean terminal() {
+            return this == DONE || this == FAILED || this == CANCELED;
+        }
+    }
+
+    public enum MutationOutcome {
+        UPDATED,
+        NOT_FOUND,
+        ALREADY_TERMINAL,
+        LEASED,
+        INVALID_TRANSITION
     }
 
     public record Entry(
@@ -46,6 +67,11 @@ public final class AgentRequestBuffer {
             int ahead
     ) {}
 
+    /** Opaque consumer lease. The generation prevents an old worker from reusing a later claim. */
+    public record Lease(Entry entry, String owner, long generation) {}
+
+    public record Mutation(Entry entry, MutationOutcome outcome) {}
+
     private static final AgentRequestBuffer INSTANCE = new AgentRequestBuffer(128);
     private static final int MAX_MESSAGE_CHARS = 500;
     private static final int MAX_STATUS_CHARS = 240;
@@ -57,7 +83,9 @@ public final class AgentRequestBuffer {
 
     private final int capacity;
     private final Entry[] ring;
+    private final Map<String, Lease> leases = new HashMap<>();
     private final AtomicLong nextSeq = new AtomicLong(1);
+    private long nextLeaseGeneration = 1;
     private long lastAgentSeenAt;
     private String lastAgentAction = "";
 
@@ -71,6 +99,20 @@ public final class AgentRequestBuffer {
     }
 
     public synchronized Entry createFromPlayer(ServerPlayer player, String source, String message) {
+        return create(source, player.getGameProfile().getName(), player.getUUID(), message);
+    }
+
+    /**
+     * Create a request from a non-Minecraft integration without exposing a player object.
+     * Public addon code should use {@code AgentLinkApi.requests()} instead of this internal class.
+     */
+    public synchronized Entry create(String source, String playerName, UUID playerUuid, String message) {
+        long next = nextSeq.get();
+        int slot = (int) ((next - 1) % capacity);
+        Entry replaced = ring[slot];
+        if (replaced != null && !replaced.status().terminal()) {
+            throw new QueueFullException(capacity);
+        }
         String trimmed = trim(message, MAX_MESSAGE_CHARS);
         long seq = nextSeq.getAndIncrement();
         long now = System.currentTimeMillis();
@@ -80,14 +122,15 @@ public final class AgentRequestBuffer {
                 now,
                 now,
                 trim(source == null || source.isBlank() ? "player" : source, 32),
-                player.getGameProfile().getName(),
-                player.getUUID(),
+                trim(playerName == null || playerName.isBlank() ? "unknown" : playerName, 64),
+                playerUuid,
                 trimmed,
                 Status.PENDING,
                 "",
                 ""
         );
-        ring[(int) ((seq - 1) % capacity)] = e;
+        if (replaced != null) leases.remove(replaced.id());
+        ring[slot] = e;
         return e;
     }
 
@@ -114,8 +157,22 @@ public final class AgentRequestBuffer {
     }
 
     public synchronized Entry updateStatus(String id, Status status, String statusMessage) {
+        return updateStatusDetailed(id, status, statusMessage).entry();
+    }
+
+    public synchronized Mutation updateStatusDetailed(String id, Status status, String statusMessage) {
         Entry e = findById(id);
-        if (e == null) return null;
+        if (e == null) return new Mutation(null, MutationOutcome.NOT_FOUND);
+        if (e.status().terminal()) return new Mutation(e, MutationOutcome.ALREADY_TERMINAL);
+        if (status == null || !canTransition(e.status(), status)) {
+            return new Mutation(e, MutationOutcome.INVALID_TRANSITION);
+        }
+        // Once a worker owns a request, an unqualified consumer may observe it but cannot rewrite it.
+        if (leases.containsKey(id)) return new Mutation(e, MutationOutcome.LEASED);
+        return new Mutation(updateStatusInternal(e, status, statusMessage), MutationOutcome.UPDATED);
+    }
+
+    private Entry updateStatusInternal(Entry e, Status status, String statusMessage) {
         Entry updated = new Entry(
                 e.seq(),
                 e.id(),
@@ -130,20 +187,57 @@ public final class AgentRequestBuffer {
                 e.reply()
         );
         ring[(int) ((updated.seq() - 1) % capacity)] = updated;
+        if (status.terminal()) leases.remove(updated.id());
         return updated;
+    }
+
+    /** Atomically move a pending request to WORKING for one named consumer. */
+    public synchronized Entry claim(String id, String workerName) {
+        String worker = trim(workerName == null || workerName.isBlank() ? "worker" : workerName, 64);
+        return claim(id, workerName, "claimed by " + worker);
+    }
+
+    /** Atomically claim a request while allowing the consumer to provide its user-facing status. */
+    public synchronized Entry claim(String id, String workerName, String statusMessage) {
+        Entry e = findById(id);
+        if (e == null || e.status() != Status.PENDING) return null;
+        return updateStatusInternal(e, Status.WORKING, statusMessage);
+    }
+
+    /** Atomically claim a pending request and return the lease required for owned writes. */
+    public synchronized Lease claimLease(String id, String workerName, String statusMessage) {
+        Entry e = findById(id);
+        if (e == null || e.status() != Status.PENDING) return null;
+        String owner = trim(workerName == null || workerName.isBlank() ? "worker" : workerName, 64);
+        Entry updated = updateStatusInternal(e, Status.WORKING, statusMessage);
+        Lease lease = new Lease(updated, owner, nextLeaseGeneration++);
+        leases.put(id, lease);
+        return lease;
     }
 
     public synchronized Entry cancel(String id, String message) {
         Entry e = findById(id);
         if (e == null) return null;
         if (e.status() == Status.DONE || e.status() == Status.FAILED || e.status() == Status.CANCELED) return e;
-        return updateStatus(id, Status.CANCELED,
+        return updateStatusInternal(e, Status.CANCELED,
                 message == null || message.isBlank() ? AgentLinkLang.tr("agentlink.request.canceled_by_operator") : message);
     }
 
     public synchronized Entry reply(String id, String reply, boolean markDone) {
+        return replyDetailed(id, reply, markDone).entry();
+    }
+
+    public synchronized Mutation replyDetailed(String id, String reply, boolean markDone) {
         Entry e = findById(id);
-        if (e == null) return null;
+        if (e == null) return new Mutation(null, MutationOutcome.NOT_FOUND);
+        // A late worker may finish after an operator canceled its request. Never let that worker
+        // resurrect the record or replace the cancellation state with a stale answer.
+        if (e.status().terminal()) return new Mutation(e, MutationOutcome.ALREADY_TERMINAL);
+        if (leases.containsKey(id)) return new Mutation(e, MutationOutcome.LEASED);
+        return new Mutation(replyInternal(e, reply, markDone), MutationOutcome.UPDATED);
+    }
+
+    private Entry replyInternal(Entry e, String reply, boolean markDone) {
         Entry updated = new Entry(
                 e.seq(),
                 e.id(),
@@ -158,7 +252,61 @@ public final class AgentRequestBuffer {
                 trim(reply == null ? "" : reply, MAX_REPLY_CHARS)
         );
         ring[(int) ((updated.seq() - 1) % capacity)] = updated;
+        if (markDone) leases.remove(updated.id());
         return updated;
+    }
+
+    /** Update a request only when the supplied owner and generation still hold its lease. */
+    public synchronized Entry updateStatusLease(String id, String owner, long generation,
+                                                 Status status, String statusMessage) {
+        Entry e = findById(id);
+        Lease lease = leases.get(id);
+        if (e == null) return null;
+        if (e.status().terminal()) return e;
+        if (!matches(lease, owner, generation) || status == null || !canTransition(e.status(), status)) {
+            return null;
+        }
+        return updateStatusInternal(e, status, statusMessage);
+    }
+
+    /** Complete a request only when the supplied owner and generation still hold its lease. */
+    public synchronized Entry replyLease(String id, String owner, long generation,
+                                          String reply, boolean markDone) {
+        Entry e = findById(id);
+        Lease lease = leases.get(id);
+        if (e == null) return null;
+        if (e.status().terminal()) return e;
+        if (!matches(lease, owner, generation)) return null;
+        return replyInternal(e, reply, markDone);
+    }
+
+    /** Complete a leased request as FAILED while preserving the diagnostic reply. */
+    public synchronized Entry failLease(String id, String owner, long generation,
+                                         String reply, String statusMessage) {
+        Entry e = findById(id);
+        Lease lease = leases.get(id);
+        if (e == null) return null;
+        if (e.status().terminal()) return e;
+        if (!matches(lease, owner, generation)) return null;
+        Entry withReply = replyInternal(e, reply, false);
+        return updateStatusInternal(withReply, Status.FAILED, statusMessage);
+    }
+
+    private static boolean matches(Lease lease, String owner, long generation) {
+        return lease != null
+                && lease.generation() == generation
+                && lease.owner().equals(owner == null ? "" : owner);
+    }
+
+    private static boolean canTransition(Status from, Status to) {
+        if (from == null || to == null) return false;
+        if (from == to) return !from.equals(Status.DONE)
+                && !from.equals(Status.FAILED)
+                && !from.equals(Status.CANCELED);
+        if (from == Status.PENDING) return to == Status.WORKING || to == Status.CANCELED;
+        if (from == Status.WORKING) return to == Status.DONE
+                || to == Status.FAILED || to == Status.CANCELED;
+        return false;
     }
 
     public synchronized Entry findById(String id) {

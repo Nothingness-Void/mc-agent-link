@@ -5,12 +5,15 @@ import com.google.gson.JsonObject;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.ChunkPos;
+import world.agentlink.api.AgentApiException;
+import world.agentlink.api.AgentLinkApi;
 import world.agentlink.dispatch.Tool;
 import world.agentlink.dispatch.ToolArgs;
 import world.agentlink.dispatch.ToolException;
 import world.agentlink.transport.ClientSession;
 
 import java.util.LongSummaryStatistics;
+import java.util.List;
 
 /**
  * Force-load, release, or list force-loaded chunks.
@@ -92,7 +95,7 @@ public class ForceLoadChunksTool implements Tool {
         JsonArray affected = new JsonArray();
         for (int cx = minChunkX; cx <= maxChunkX; cx++) {
             for (int cz = minChunkZ; cz <= maxChunkZ; cz++) {
-                boolean ok = level.setChunkForced(cx, cz, add);
+                boolean ok = setForced(level, cx, cz, add);
                 if (ok) changed++;
                 if (affected.size() < 256) {
                     JsonArray pair = new JsonArray();
@@ -124,14 +127,14 @@ public class ForceLoadChunksTool implements Tool {
         return r;
     }
 
-    private JsonObject list(ServerLevel level) {
-        var forced = level.getForcedChunks();
+    private JsonObject list(ServerLevel level) throws ToolException {
+        var forced = forced(level);
         JsonArray arr = new JsonArray();
         LongSummaryStatistics xs = new LongSummaryStatistics();
         LongSummaryStatistics zs = new LongSummaryStatistics();
-        for (long packed : forced) {
-            int cx = ChunkPos.getX(packed);
-            int cz = ChunkPos.getZ(packed);
+        for (ChunkPos pos : forced) {
+            int cx = pos.x;
+            int cz = pos.z;
             xs.accept(cx);
             zs.accept(cz);
             if (arr.size() < 512) {
@@ -154,11 +157,11 @@ public class ForceLoadChunksTool implements Tool {
         return r;
     }
 
-    private JsonObject clear(ServerLevel level) {
-        var forced = new java.util.ArrayList<Long>(level.getForcedChunks());
+    private JsonObject clear(ServerLevel level) throws ToolException {
+        var forced = forced(level);
         int removed = 0;
-        for (long packed : forced) {
-            if (level.setChunkForced(ChunkPos.getX(packed), ChunkPos.getZ(packed), false)) removed++;
+        for (ChunkPos pos : forced) {
+            if (setForced(level, pos.x, pos.z, false)) removed++;
         }
         JsonObject r = new JsonObject();
         r.addProperty("dim", Dimensions.idOf(level));
@@ -179,5 +182,22 @@ public class ForceLoadChunksTool implements Tool {
         o.addProperty("max_block_x", (maxX << 4) + 15);
         o.addProperty("max_block_z", (maxZ << 4) + 15);
         return o;
+    }
+
+    private static boolean setForced(ServerLevel level, int chunkX, int chunkZ, boolean forced)
+            throws ToolException {
+        try {
+            return AgentLinkApi.chunks().setForced(level, chunkX, chunkZ, forced);
+        } catch (AgentApiException ex) {
+            throw new ToolException(ex.code(), ex.getMessage());
+        }
+    }
+
+    private static List<ChunkPos> forced(ServerLevel level) throws ToolException {
+        try {
+            return AgentLinkApi.chunks().forced(level);
+        } catch (AgentApiException ex) {
+            throw new ToolException(ex.code(), ex.getMessage());
+        }
     }
 }

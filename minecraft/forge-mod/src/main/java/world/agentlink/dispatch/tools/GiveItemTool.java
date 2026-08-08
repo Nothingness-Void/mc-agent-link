@@ -1,14 +1,11 @@
 package world.agentlink.dispatch.tools;
 
 import com.google.gson.JsonObject;
-import com.mojang.brigadier.StringReader;
-import com.mojang.brigadier.exceptions.CommandSyntaxException;
-import net.minecraft.commands.arguments.item.ItemParser;
-import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
+import world.agentlink.api.AgentApiException;
+import world.agentlink.api.AgentLinkApi;
 import world.agentlink.dispatch.Tool;
 import world.agentlink.dispatch.ToolArgs;
 import world.agentlink.dispatch.ToolException;
@@ -50,16 +47,14 @@ public class GiveItemTool implements Tool {
         int count = ToolArgs.optIntClamped(args, "count", 1, 1, MAX_TOTAL);
         boolean dropOverflow = ToolArgs.optBool(args, "drop_overflow", true);
 
-        ItemParser.ItemResult parsed;
+        ItemStack template;
         try {
-            parsed = ItemParser.parseForItem(BuiltInRegistries.ITEM.asLookup(),
-                    new StringReader(spec.trim()));
-        } catch (CommandSyntaxException e) {
+            template = AgentLinkApi.items().parse(spec);
+        } catch (AgentApiException e) {
             throw new ToolException("INVALID_ARGS",
                     "Invalid item \"" + spec + "\": " + e.getMessage()
                             + " (accepts id plus optional NBT, e.g. diamond_sword{Unbreakable:1b})");
         }
-        Item item = parsed.item().value();
 
         int given = 0;
         int dropped = 0;
@@ -67,8 +62,7 @@ public class GiveItemTool implements Tool {
         // Hand out in stack-sized chunks so a request for 200 cobblestone becomes three stacks and
         // a partial, exactly as a player would expect.
         while (remaining > 0) {
-            ItemStack stack = new ItemStack(item, 1);
-            if (parsed.nbt() != null) stack.setTag(parsed.nbt().copy());
+            ItemStack stack = template.copy();
             int chunk = Math.min(remaining, stack.getMaxStackSize());
             stack.setCount(chunk);
             remaining -= chunk;
@@ -97,7 +91,7 @@ public class GiveItemTool implements Tool {
 
         JsonObject r = new JsonObject();
         r.addProperty("name", player.getGameProfile().getName());
-        r.addProperty("item", String.valueOf(BuiltInRegistries.ITEM.getKey(item)));
+        r.addProperty("item", AgentLinkApi.items().id(template));
         r.addProperty("requested", count);
         r.addProperty("added_to_inventory", given);
         r.addProperty("dropped_on_ground", dropped);

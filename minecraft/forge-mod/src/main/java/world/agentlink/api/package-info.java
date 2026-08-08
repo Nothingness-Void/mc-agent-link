@@ -6,8 +6,10 @@
  * {@code world.agentlink.transport.*}, {@code world.agentlink.config.*}) is internal and may
  * change without notice.
  *
- * <p>The standard entry point is {@link world.agentlink.api.AgentLinkApi}. From an addon's
- * mod constructor:
+ * <p>The standard entry point is {@link world.agentlink.api.AgentLinkApi}. It exposes independent
+ * facades for tools, requests, events, tasks, diagnostics, server-thread execution, roles, build zones, and
+ * typed vanilla controls for items, players, entities, worlds, scoreboards, and server lifecycle.
+ * From an addon's mod constructor:
  *
  * <pre>{@code
  * AgentLinkApi.registerTool(MOD_ID, new MyTool());

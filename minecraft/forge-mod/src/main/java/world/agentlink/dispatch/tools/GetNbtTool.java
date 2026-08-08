@@ -10,10 +10,11 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.level.block.entity.BlockEntity;
+import world.agentlink.api.AgentApiException;
+import world.agentlink.api.AgentLinkApi;
 import world.agentlink.dispatch.Tool;
 import world.agentlink.dispatch.ToolArgs;
 import world.agentlink.dispatch.ToolException;
-import world.agentlink.nbt.NbtJson;
 import world.agentlink.transport.ClientSession;
 
 import java.util.List;
@@ -30,7 +31,8 @@ import java.util.UUID;
  * one representation that covers all of it, so exposing it turns "the tool doesn't support that"
  * into "read the field you need".
  *
- * <p>Output carries both a JSON projection and canonical SNBT — see {@link NbtJson} for why both.
+ * <p>Output carries both a JSON projection and canonical SNBT — see {@link world.agentlink.api.AgentNbtApi}
+ * for why both.
  * An optional {@code path} narrows the read using vanilla's own NBT-path grammar, which matters for
  * token cost: a shulker box's full NBT is large, {@code Items[0].tag.display.Name} is not.
  */
@@ -125,7 +127,7 @@ public class GetNbtTool implements Tool {
 
         String path = ToolArgs.optString(args, "path", null);
         if (path != null && !path.isBlank()) {
-            List<Tag> matches = NbtJson.resolvePath(root, path);
+            List<Tag> matches = resolvePath(root, path);
             r.addProperty("path", path);
             r.addProperty("match_count", matches.size());
             if (matches.isEmpty()) {
@@ -138,7 +140,7 @@ public class GetNbtTool implements Tool {
                 addEnvelope(r, matches.get(0));
             } else {
                 JsonArray arr = new JsonArray();
-                for (Tag t : matches) arr.add(NbtJson.envelope(t));
+                for (Tag t : matches) arr.add(AgentLinkApi.nbt().envelope(t));
                 r.add("matches", arr);
             }
             return r;
@@ -151,7 +153,7 @@ public class GetNbtTool implements Tool {
 
     /** Attach {@code snbt} + {@code nbt}, truncating the SNBT rather than returning a huge blob. */
     private void addEnvelope(JsonObject r, Tag tag) {
-        JsonObject env = NbtJson.envelope(tag);
+        JsonObject env = AgentLinkApi.nbt().envelope(tag);
         String snbt = env.get("snbt").getAsString();
         if (snbt.length() > MAX_SNBT_CHARS) {
             r.addProperty("snbt", snbt.substring(0, MAX_SNBT_CHARS));
@@ -199,4 +201,13 @@ public class GetNbtTool implements Tool {
         if (p == null) throw new ToolException("NOT_FOUND", "Player is not online: " + name);
         return p;
     }
+
+    private static List<Tag> resolvePath(Tag root, String path) throws ToolException {
+        try {
+            return AgentLinkApi.nbt().resolvePath(root, path);
+        } catch (AgentApiException ex) {
+            throw new ToolException(ex.code(), ex.getMessage());
+        }
+    }
+
 }

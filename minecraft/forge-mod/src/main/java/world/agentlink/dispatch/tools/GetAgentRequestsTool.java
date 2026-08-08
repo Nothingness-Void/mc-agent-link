@@ -1,8 +1,8 @@
 package world.agentlink.dispatch.tools;
 
-import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
-import world.agentlink.agent.AgentRequestBuffer;
+import world.agentlink.api.AgentLinkApi;
+import world.agentlink.api.AgentRequestApi;
 import world.agentlink.dispatch.Tool;
 import world.agentlink.dispatch.ToolException;
 import world.agentlink.transport.ClientSession;
@@ -26,20 +26,21 @@ public class GetAgentRequestsTool implements Tool {
         if (limit <= 0 || limit > MAX_LIMIT) limit = DEFAULT_LIMIT;
         boolean includeDone = args.has("include_done") && args.get("include_done").getAsBoolean();
 
-        AgentRequestBuffer buf = AgentRequestBuffer.get();
+        AgentRequestApi buf = AgentLinkApi.requests();
         buf.markAgentSeen("get_agent_requests");
-        long effectiveSince = sinceSeq <= 0 ? Math.max(0, buf.head() - limit) : sinceSeq;
-        List<AgentRequestBuffer.Entry> entries = buf.since(effectiveSince, limit, includeDone);
-        JsonArray arr = buf.toJsonArray(entries);
+        long head = buf.head();
+        long effectiveSince = sinceSeq <= 0 ? Math.max(0, head - limit) : sinceSeq;
+        List<AgentRequestApi.Request> entries = buf.since(effectiveSince, limit, includeDone);
 
         JsonObject r = new JsonObject();
+        com.google.gson.JsonArray arr = new com.google.gson.JsonArray();
+        for (AgentRequestApi.Request entry : entries) arr.add(buf.toJson(entry));
         r.add("requests", arr);
-        r.addProperty("returned", arr.size());
-        r.addProperty("head_seq", buf.head());
+        r.addProperty("returned", entries.size());
+        r.addProperty("head_seq", head);
         r.addProperty("oldest_seq", buf.oldestSeq());
         r.addProperty("buffer_capacity", buf.capacity());
-        r.addProperty("truncated", !entries.isEmpty()
-                && entries.get(entries.size() - 1).seq() < buf.head());
+        r.addProperty("truncated", !entries.isEmpty() && entries.get(entries.size() - 1).seq() < head);
         return r;
     }
 }

@@ -2,19 +2,17 @@ package world.agentlink.dispatch.tools;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
-import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.Entity;
-import net.minecraft.world.entity.EntityType;
-import net.minecraft.world.entity.MobSpawnType;
-import net.minecraft.world.entity.Mob;
+import world.agentlink.api.AgentApiException;
+import world.agentlink.api.AgentEntitySpawnApi;
+import world.agentlink.api.AgentLinkApi;
 import world.agentlink.dispatch.Tool;
 import world.agentlink.dispatch.ToolArgs;
 import world.agentlink.dispatch.ToolException;
-import world.agentlink.nbt.NbtJson;
 import world.agentlink.sandbox.BuildZones;
 import world.agentlink.transport.ClientSession;
 
@@ -38,7 +36,7 @@ import world.agentlink.transport.ClientSession;
  */
 public class SpawnEntityTool implements Tool {
 
-    private static final int MAX_COUNT = 64;
+    private static final int MAX_COUNT = AgentEntitySpawnApi.MAX_COUNT;
 
     private final MinecraftServer mc;
 
@@ -72,25 +70,17 @@ public class SpawnEntityTool implements Tool {
 
         ResourceLocation rl = ResourceLocation.tryParse(typeId.trim());
         if (rl == null) throw new ToolException("INVALID_ARGS", "Invalid entity type: " + typeId);
-        if (!BuiltInRegistries.ENTITY_TYPE.containsKey(rl)) {
-            throw new ToolException("INVALID_ARGS",
-                    "Unknown entity type: " + typeId + " — call list_entity_ids to see valid ids");
-        }
-        if ("minecraft:player".equals(rl.toString())) {
-            throw new ToolException("INVALID_ARGS",
-                    "Players cannot be summoned. To create a stand-in, spawn an armor_stand"
-                            + " or use a mod-provided fake-player entity.");
-        }
-        EntityType<?> type = BuiltInRegistries.ENTITY_TYPE.get(rl);
-        if (type == null) throw new ToolException("INVALID_ARGS", "Unknown entity type: " + typeId);
-
         // Build the spawn NBT once. Vanilla requires the type id inside the compound when loading
         // an entity from NBT, so we always set it rather than trusting the caller's copy.
         CompoundTag nbt = new CompoundTag();
         String snbt = ToolArgs.optString(args, "nbt", null);
-        if (snbt != null && !snbt.isBlank()) nbt = NbtJson.parseSnbtCompound(snbt);
-        nbt = nbt.copy();
-        nbt.putString("id", rl.toString());
+        if (snbt != null && !snbt.isBlank()) {
+            try {
+                nbt = AgentLinkApi.nbt().parseCompound(snbt);
+            } catch (AgentApiException ex) {
+                throw new ToolException(ex.code(), ex.getMessage());
+            }
+        }
 
         boolean noAi = ToolArgs.optBool(args, "no_ai", false);
         boolean persistent = ToolArgs.optBool(args, "persistent", false);
@@ -103,34 +93,15 @@ public class SpawnEntityTool implements Tool {
                 (int) Math.floor(pos.x()), (int) Math.floor(pos.y()), (int) Math.floor(pos.z()));
         boolean chunkLoaded = level.hasChunkAt(blockPos);
 
+        AgentEntitySpawnApi.SpawnResult spawn;
+        try {
+            spawn = AgentLinkApi.entitySpawn().spawn(level, rl, pos.x(), pos.y(), pos.z(), count, nbt,
+                    customName, ToolArgs.optBool(args, "name_visible", false), noAi, persistent);
+        } catch (AgentApiException ex) {
+            throw new ToolException(ex.code(), ex.getMessage());
+        }
         JsonArray spawned = new JsonArray();
-        int failed = 0;
-        for (int i = 0; i < count; i++) {
-            CompoundTag perEntity = nbt.copy();
-            Entity entity = EntityType.loadEntityRecursive(perEntity, level, e -> {
-                e.moveTo(pos.x(), pos.y(), pos.z(), e.getYRot(), e.getXRot());
-                return e;
-            });
-            if (entity == null) {
-                failed++;
-                continue;
-            }
-            if (customName != null && !customName.isBlank()) {
-                entity.setCustomName(net.minecraft.network.chat.Component.literal(customName));
-                entity.setCustomNameVisible(ToolArgs.optBool(args, "name_visible", false));
-            }
-            if (entity instanceof Mob mob) {
-                if (noAi) mob.setNoAi(true);
-                // Persistence prevents the mob from being despawned by distance — decoration and
-                // scenario mobs the agent placed deliberately should not evaporate.
-                if (persistent) mob.setPersistenceRequired();
-                mob.finalizeSpawn(level, level.getCurrentDifficultyAt(mob.blockPosition()),
-                        MobSpawnType.COMMAND, null, null);
-            }
-            if (!level.addFreshEntity(entity)) {
-                failed++;
-                continue;
-            }
+        for (Entity entity : spawn.entities()) {
             JsonObject o = new JsonObject();
             o.addProperty("uuid", entity.getUUID().toString());
             o.addProperty("x", entity.getX());
@@ -138,6 +109,7 @@ public class SpawnEntityTool implements Tool {
             o.addProperty("z", entity.getZ());
             spawned.add(o);
         }
+        int failed = spawn.failed();
 
         JsonObject r = new JsonObject();
         r.addProperty("dim", Dimensions.idOf(level));

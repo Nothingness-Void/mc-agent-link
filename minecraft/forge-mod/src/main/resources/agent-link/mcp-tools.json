@@ -314,6 +314,26 @@
     "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
   },
   {
+    "name": "server_diagnose",
+    "description": "Bounded one-shot server health snapshot with a total timeout budget. Collects tick statistics, world/entity/chunk counts, recent WARN/ERROR logs, server-thread dump, installed mods, newest crash-report summary, optional spark stats, and conservative candidate findings. It never starts a profiler or uploads data.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "include_logs": { "type": "boolean", "description": "Include the recent WARN/ERROR/FATAL log tail. Default true." },
+        "include_crash_report": { "type": "boolean", "description": "Include metadata and key lines from the newest crash report. Default true." },
+        "include_crash_content": { "type": "boolean", "description": "Include a bounded crash-report text prefix. Default false; use read_server_file for the full report." },
+        "include_thread_dump": { "type": "boolean", "description": "Include server-related JVM threads and bounded stack frames. Default true." },
+        "include_mods": { "type": "boolean", "description": "Include the installed Forge mod list. Default true." },
+        "include_spark": { "type": "boolean", "description": "Include non-invasive spark availability and statistics when installed. Default true." },
+        "log_limit": { "type": "integer", "description": "Recent warning/error lines, clamped to 1..200. Default 80." },
+        "max_frames": { "type": "integer", "description": "Stack frames per server thread, clamped to 1..100. Default 20." },
+        "max_crash_bytes": { "type": "integer", "description": "Maximum crash-report prefix bytes, clamped to 4096..262144. Default 65536." },
+        "timeout_ms": { "type": "integer", "description": "Total diagnostic budget in milliseconds, clamped to 1000..30000. Default 12000." }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
     "name": "agent_heartbeat",
     "description": "Record that an MCP agent is online/active. Useful for in-game /agent status.",
     "inputSchema": {
@@ -467,6 +487,17 @@
     "name": "tick_profile",
     "description": "Tick-time distribution over the last ~100 ticks (avg / p50 / p95 / p99 / max in mspt, plus tps). Use this when investigating lag — it reveals whether 19.5 TPS is steady-state or hides spikes. Pair with `thread_dump` to find what's blocking the server thread, or with `/spark profiler` for sampled flame graphs.",
     "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+  },
+  {
+    "name": "tick_incidents",
+    "description": "Bounded timing history of recent slow server ticks. Records only ticks above 50 ms, coalesces continuous pressure to at most one incident per second, reports slow samples from the last 10 seconds, and does not claim causal attribution; use spark for the causal profile.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "limit": { "type": "integer", "description": "Number of most recent incident records to return, clamped to 1..32. Default 16." }
+      },
+      "additionalProperties": false
+    }
   },
   {
     "name": "thread_dump",
@@ -653,12 +684,13 @@
   },
   {
     "name": "undo_blocks",
-    "description": "Reverse the most recent native block writes (set_block / fill_blocks / set_blocks / restore_block_snapshot). Separate from we_undo, which covers WorldEdit edits only. mode:\"list\" inspects the stack without touching the world — do that first if you are unsure what the last operation was. The stack does NOT survive a server restart.",
+    "description": "Reverse native block writes (set_block / fill_blocks / set_blocks / restore_block_snapshot). Separate from we_undo, which covers WorldEdit edits only. mode:\"list\" inspects the stack without touching the world; pass operation_id to reverse one exact newest edit. The stack does NOT survive a server restart.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "mode": { "type": "string", "enum": ["undo", "list"], "description": "Default \"undo\"." },
-        "steps": { "type": "number", "description": "How many operations to reverse (1-32, default 1)." }
+        "steps": { "type": "number", "description": "How many operations to reverse (1-32, default 1)." },
+        "operation_id": { "type": "string", "description": "Exact operation id from mode=list; only the newest edit can be named explicitly." }
       },
       "additionalProperties": false
     }
@@ -918,6 +950,238 @@
     }
   },
 
+  {
+    "name": "manage_players",
+    "description": "Structured player administration: list online and stored lists, kick, ban/pardon players or IPs, op/deop profiles, and manage the whitelist. Offline profiles must be online, cached, or supplied with both uuid and player_name.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "action": { "type": "string", "enum": ["list", "kick", "ban", "pardon", "ban_ip", "pardon_ip", "op", "deop", "whitelist_add", "whitelist_remove", "whitelist_enable", "whitelist_disable", "whitelist_reload"] },
+        "name": { "type": "string", "description": "Online or cached player name." },
+        "player_name": { "type": "string", "description": "Display name to store with an offline UUID." },
+        "uuid": { "type": "string" },
+        "ip": { "type": "string", "description": "IP address for ban_ip or pardon_ip; ban_ip can derive it from an online player target." },
+        "reason": { "type": "string" },
+        "source": { "type": "string", "description": "Ban-list source label. Default agent-link." },
+        "duration_seconds": { "type": "integer", "description": "0 means permanent." },
+        "level": { "type": "integer", "description": "OP permission level 1..4. Default server operator level." },
+        "bypass_player_limit": { "type": "boolean" }
+      },
+      "required": ["action"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "manage_player_inventory",
+    "description": "Directly edit an online player's inventory slots. Supports clear inventory/slot, replace a slot with a full vanilla item specification, swap slots, change the selected hotbar slot, and intentionally drop a slot. Use get_player_inventory to inspect first.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "action": { "type": "string", "enum": ["clear_inventory", "clear_slot", "set_slot", "swap_slots", "set_selected_slot", "drop_slot"] },
+        "name": { "type": "string" },
+        "slot": { "type": "integer", "description": "0..40: hotbar/main/armor/offhand depending on the slot." },
+        "item": { "type": "string", "description": "Item id plus optional NBT for set_slot." },
+        "count": { "type": "integer" },
+        "first_slot": { "type": "integer" },
+        "second_slot": { "type": "integer" }
+      },
+      "required": ["action", "name"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "manage_scoreboard",
+    "description": "Create/remove scoreboard objectives, set/add/reset holder scores, create/remove/configure teams, manage team membership, and set display slots. Use get_scoreboard for reads.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "action": { "type": "string", "enum": ["create_objective", "remove_objective", "set_score", "add_score", "reset_score", "create_team", "remove_team", "add_team_member", "remove_team_member", "configure_team", "set_display"] },
+        "name": { "type": "string", "description": "Objective or team name, depending on action." },
+        "criteria": { "type": "string", "description": "Objective criteria, default dummy." },
+        "display_name": { "type": "string" },
+        "render_type": { "type": "string", "enum": ["integer", "hearts"] },
+        "holder": { "type": "string" },
+        "objective": { "type": "string" },
+        "value": { "type": "integer" },
+        "team": { "type": "string" },
+        "member": { "type": "string" },
+        "slot": { "type": "string", "description": "list, sidebar, below_name, or a teams sidebar slot." },
+        "color": { "type": "string" },
+        "allow_friendly_fire": { "type": "boolean" },
+        "see_friendly_invisibles": { "type": "boolean" },
+        "name_tag_visibility": { "type": "string" },
+        "death_message_visibility": { "type": "string" },
+        "collision_rule": { "type": "string" }
+      },
+      "required": ["action"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "control_entity",
+    "description": "Typed controls for loaded entities: mount/dismount, damage/heal, kill/discard, velocity, rotation, equipment, and base attributes. kill/discard require confirmed=true; targeting a player additionally requires allow_player=true.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "action": { "type": "string", "enum": ["mount", "dismount", "damage", "heal", "kill", "discard", "velocity", "rotation", "equipment", "attribute"] },
+        "name": { "type": "string", "description": "Player name for the main subject." },
+        "uuid": { "type": "string", "description": "Loaded entity UUID for the main subject." },
+        "rider_name": { "type": "string" },
+        "rider_uuid": { "type": "string" },
+        "vehicle_name": { "type": "string" },
+        "vehicle_uuid": { "type": "string" },
+        "amount": { "type": "number" },
+        "cause": { "type": "string", "description": "generic, magic, fire, lava, fall, drown, starve, wither, or freeze." },
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "z": { "type": "number" },
+        "yaw": { "type": "number" },
+        "pitch": { "type": "number" },
+        "slot": { "type": "string", "description": "Equipment slot: head, chest, legs, feet, mainhand, or offhand." },
+        "item": { "type": "string" },
+        "count": { "type": "integer" },
+        "attribute": { "type": "string", "description": "Attribute id, e.g. minecraft:generic.max_health." },
+        "base_value": { "type": "number" },
+        "confirmed": { "type": "boolean" },
+        "allow_player": { "type": "boolean" }
+      },
+      "required": ["action"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "set_world_spawn",
+    "description": "Set the shared spawn point in one dimension or every loaded dimension. This is the typed equivalent of /setworldspawn.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "pos": { "description": "{x,y,z} or [x,y,z]." },
+        "x": { "type": "integer" },
+        "y": { "type": "integer" },
+        "z": { "type": "integer" },
+        "angle": { "type": "number" },
+        "dim": { "type": "string" },
+        "all_dimensions": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "set_world_border",
+    "description": "Read or mutate the vanilla world border: center, fixed size, timed lerp, damage settings, warnings, or reset. This is the typed equivalent of /worldborder.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "action": { "type": "string", "enum": ["get", "center", "size", "lerp", "damage", "warning", "reset"] },
+        "dim": { "type": "string" },
+        "center": { "type": "object", "properties": { "x": { "type": "number" }, "z": { "type": "number" } } },
+        "x": { "type": "number" },
+        "z": { "type": "number" },
+        "size": { "type": "number" },
+        "from": { "type": "number" },
+        "to": { "type": "number" },
+        "duration_ticks": { "type": "integer" },
+        "damage_per_block": { "type": "number" },
+        "safe_zone": { "type": "number" },
+        "warning_blocks": { "type": "integer" },
+        "warning_seconds": { "type": "integer" }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "server_control",
+    "description": "Explicit server lifecycle/runtime controls: save, reload selected resources, stop, change view/simulation distance, or allow cheats for all players. stop requires confirmed=true and cannot restart the JVM; use an external supervisor for restart.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "action": { "type": "string", "enum": ["save", "reload_resources", "stop", "set_view_distance", "set_simulation_distance", "set_allow_cheats"] },
+        "flush": { "type": "boolean" },
+        "confirmed": { "type": "boolean" },
+        "chunks": { "type": "integer", "description": "2..32 for distance actions." },
+        "enabled": { "type": "boolean" }
+      },
+      "required": ["action"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "manage_container",
+    "description": "Write slots in a loaded block container such as a chest, hopper, dispenser, barrel, or shulker. Supports replacing/clearing one slot, clearing the container, and swapping two slots. Use get_container to inspect first.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "action": { "type": "string", "enum": ["set_slot", "clear_slot", "clear_container", "swap_slots"] },
+        "dim": { "type": "string" },
+        "pos": { "description": "{x,y,z} or [x,y,z]." },
+        "x": { "type": "integer" },
+        "y": { "type": "integer" },
+        "z": { "type": "integer" },
+        "slot": { "type": "integer" },
+        "item": { "type": "string", "description": "Item id plus optional NBT." },
+        "count": { "type": "integer" },
+        "first_slot": { "type": "integer" },
+        "second_slot": { "type": "integer" }
+      },
+      "required": ["action"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "set_player_state",
+    "description": "Set typed state on an online player: health, absorption, food/saturation, air, experience, fire, and ability flags. Returns a before/after snapshot.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "health": { "type": "number" },
+        "absorption": { "type": "number" },
+        "food": { "type": "integer", "description": "0..20." },
+        "saturation": { "type": "number" },
+        "air": { "type": "integer" },
+        "experience_points": { "type": "integer" },
+        "experience_levels": { "type": "integer" },
+        "fire_seconds": { "type": "integer", "description": "0 extinguishes." },
+        "invulnerable": { "type": "boolean" },
+        "mayfly": { "type": "boolean" },
+        "flying": { "type": "boolean" }
+      },
+      "required": ["name"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "manage_player_progression",
+    "description": "List recipes and grant/revoke recipes or advancement criteria for an online player. Advancement criterion omitted or '*' means all criteria.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "action": { "type": "string", "enum": ["list_recipes", "grant_recipes", "revoke_recipes", "inspect_advancement", "grant_advancement", "revoke_advancement"] },
+        "name": { "type": "string" },
+        "contains": { "type": "string", "description": "list_recipes substring filter." },
+        "limit": { "type": "integer" },
+        "recipe": { "type": "string" },
+        "recipes": { "type": "array", "items": { "type": "string" } },
+        "advancement": { "type": "string" },
+        "criterion": { "type": "string", "description": "Default '*'." }
+      },
+      "required": ["action"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "manage_datapacks",
+    "description": "List available/selected data packs, enable or disable packs, and reload selected resources through PackRepository. JVM/mod restart is not implied.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "action": { "type": "string", "enum": ["list", "enable", "disable", "reload"] },
+        "id": { "type": "string" },
+        "ids": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    }
+  },
   {
     "name": "we_status",
     "description": "Report whether WorldEdit or FAWE is installed, its version, and the current agent undo depth. Call this before any we_* tool — they are disabled with a clear error when WorldEdit is absent. The native set_block / fill_blocks / set_blocks tools always work and need no WorldEdit.",

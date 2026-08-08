@@ -32,21 +32,27 @@ public class TickProfileTool implements Tool {
     public JsonObject invoke(JsonObject args, ClientSession session) {
         long[] raw = mc.tickTimes;
         long[] sorted = Arrays.copyOf(raw, raw.length);
+        int sampleCount = 0;
+        for (long t : raw) {
+            if (t > 0) sorted[sampleCount++] = t;
+        }
+        sorted = Arrays.copyOf(sorted, sampleCount);
         Arrays.sort(sorted);
 
         double avgNanos = 0;
         long maxNanos = 0;
-        for (long t : raw) {
+        for (long t : sorted) {
             avgNanos += t;
             if (t > maxNanos) maxNanos = t;
         }
-        avgNanos /= Math.max(1, raw.length);
+        avgNanos /= Math.max(1, sorted.length);
 
         double avgMs = avgNanos / 1_000_000.0;
         double tps = Math.min(1000.0 / Math.max(avgMs, 50.0), 20.0);
 
         JsonObject r = new JsonObject();
         r.addProperty("samples", sorted.length);
+        r.addProperty("window_capacity", raw.length);
         r.addProperty("avg_mspt", round2(avgMs));
         r.addProperty("max_mspt", round2(maxNanos / 1_000_000.0));
         r.addProperty("p50_mspt", round2(percentileMs(sorted, 0.50)));

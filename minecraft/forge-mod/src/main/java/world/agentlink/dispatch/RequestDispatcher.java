@@ -26,6 +26,17 @@ import world.agentlink.dispatch.tools.ModifyEntityTool;
 import world.agentlink.dispatch.tools.RemoveEntitiesTool;
 import world.agentlink.dispatch.tools.RestoreBlockSnapshotTool;
 import world.agentlink.dispatch.tools.SaveWorldTool;
+import world.agentlink.dispatch.tools.ManagePlayersTool;
+import world.agentlink.dispatch.tools.ManageInventoryTool;
+import world.agentlink.dispatch.tools.ManageScoreboardTool;
+import world.agentlink.dispatch.tools.ControlEntityTool;
+import world.agentlink.dispatch.tools.SetWorldSpawnTool;
+import world.agentlink.dispatch.tools.SetWorldBorderTool;
+import world.agentlink.dispatch.tools.ServerControlTool;
+import world.agentlink.dispatch.tools.ManageContainerTool;
+import world.agentlink.dispatch.tools.SetPlayerStateTool;
+import world.agentlink.dispatch.tools.ManageProgressionTool;
+import world.agentlink.dispatch.tools.ManageDatapacksTool;
 import world.agentlink.dispatch.tools.SetBlockTool;
 import world.agentlink.dispatch.tools.SetBlocksTool;
 import world.agentlink.dispatch.tools.SetGamemodeTool;
@@ -70,8 +81,10 @@ import world.agentlink.dispatch.tools.SparkProfilerStartTool;
 import world.agentlink.dispatch.tools.SparkProfilerStopTool;
 import world.agentlink.dispatch.tools.SparkStatsTool;
 import world.agentlink.dispatch.tools.SparkStatusTool;
+import world.agentlink.dispatch.tools.ServerDiagnoseTool;
 import world.agentlink.dispatch.tools.SubscribeEventsTool;
 import world.agentlink.dispatch.tools.ThreadDumpTool;
+import world.agentlink.dispatch.tools.TickIncidentsTool;
 import world.agentlink.dispatch.tools.TickProfileTool;
 import world.agentlink.dispatch.tools.UnsubscribeEventsTool;
 import world.agentlink.dispatch.tools.UpdateAgentRequestStatusTool;
@@ -82,6 +95,7 @@ import world.agentlink.dispatch.tools.WeSphereTool;
 import world.agentlink.dispatch.tools.WeStatusTool;
 import world.agentlink.dispatch.tools.WeUndoTool;
 import world.agentlink.dispatch.tools.WriteConfigFileTool;
+import world.agentlink.task.TaskContext;
 import world.agentlink.transport.ClientSession;
 
 import java.util.ArrayList;
@@ -113,6 +127,8 @@ public class RequestDispatcher {
     private final Map<String, RegisteredEntry> addonTools = new LinkedHashMap<>();
     /** Runs tools that declared {@link Tool#offThread()} so they can't stall the tick loop. */
     private final ExecutorService workers;
+    /** Set before lifecycle teardown so late HTTP callbacks fail instead of queueing dead work. */
+    private volatile boolean shuttingDown;
 
     public RequestDispatcher(MinecraftServer mc) {
         this.mc = mc;
@@ -128,6 +144,7 @@ public class RequestDispatcher {
         registerBuiltin(new GetPlayerInfoTool(mc));
         registerBuiltin(new BroadcastTool(mc));
         registerBuiltin(new GetServerStatsTool(mc));
+        registerBuiltin(new ServerDiagnoseTool(mc));
         registerBuiltin(new AgentHeartbeatTool());
         registerBuiltin(new GetAgentRequestsTool());
         registerBuiltin(new UpdateAgentRequestStatusTool(mc));
@@ -141,6 +158,7 @@ public class RequestDispatcher {
         registerBuiltin(new ListDirTool(mc));
         registerBuiltin(new WriteConfigFileTool(mc));
         registerBuiltin(new TickProfileTool(mc));
+        registerBuiltin(new TickIncidentsTool());
         registerBuiltin(new ThreadDumpTool());
         registerBuiltin(new SparkStatusTool(mc));
         registerBuiltin(new SparkStatsTool());
@@ -215,6 +233,20 @@ public class RequestDispatcher {
         registerBuiltin(new ForceLoadChunksTool(mc));
         registerBuiltin(new SaveWorldTool(mc));
 
+        // Structured operator controls (0.5.0) — these use typed vanilla APIs rather than
+        // making the agent format command strings and parse chat output.
+        registerBuiltin(new ManagePlayersTool(mc));
+        registerBuiltin(new ManageInventoryTool(mc));
+        registerBuiltin(new ManageScoreboardTool(mc));
+        registerBuiltin(new ControlEntityTool(mc));
+        registerBuiltin(new SetWorldSpawnTool(mc));
+        registerBuiltin(new SetWorldBorderTool(mc));
+        registerBuiltin(new ServerControlTool(mc));
+        registerBuiltin(new ManageContainerTool(mc));
+        registerBuiltin(new SetPlayerStateTool(mc));
+        registerBuiltin(new ManageProgressionTool(mc));
+        registerBuiltin(new ManageDatapacksTool(mc));
+
         // Self-introspection (0.5.0) — lets the agent learn its own permission boundaries.
         registerBuiltin(new WhoamiTool(mc));
 
@@ -271,16 +303,11 @@ public class RequestDispatcher {
         }
         // Re-key the tool under its prefixed name so dispatch/MCP look it up consistently.
         Tool delegate = entry.tool();
-        Tool wrapped = new Tool() {
-            @Override public String name() { return entry.fullName(); }
-            @Override public JsonObject invoke(JsonObject args, ClientSession session) throws ToolException {
-                return delegate.invoke(args, session);
-            }
-            @Override public String description() { return delegate.description(); }
-            @Override public JsonObject inputSchema() { return delegate.inputSchema(); }
-            @Override public boolean offThread() { return delegate.offThread(); }
-            @Override public void declareScope(JsonObject args) { delegate.declareScope(args); }
-        };
+        // Keep the Sliceable marker when an addon tool is re-keyed. Without this, start_task sees
+        // every addon as a non-sliceable tool and runs long addon writes as one server-thread hop.
+        Tool wrapped = delegate instanceof TaskContext.Sliceable sliceable
+                ? new SliceableAddonToolWrapper(entry.fullName(), delegate, sliceable)
+                : new AddonToolWrapper(entry.fullName(), delegate);
         tools.put(entry.fullName(), wrapped);
         addonTools.put(entry.fullName(), entry);
         AgentLinkMod.LOG.info("agent-link: registered addon tool {} (modId={})", entry.fullName(), entry.modId());
@@ -356,9 +383,11 @@ public class RequestDispatcher {
         if (approval != null) {
             approval.request(toolName, args, session).thenAccept(decision -> {
                 if (!decision.approved()) {
+                    String code = decision.outcome() == AgentToolApproval.Outcome.SERVER_STOPPING
+                            ? "SERVER_STOPPING" : "APPROVAL_DENIED";
                     CallTier.with(tier, () -> AuditLog.record(toolName, args, decision, false,
-                            "APPROVAL_DENIED", decision.reason(), null));
-                    done.accept(null, new ToolException("APPROVAL_DENIED", decision.reason()));
+                            code, decision.reason(), null));
+                    done.accept(null, new ToolException(code, decision.reason()));
                     return;
                 }
                 invokeApproved(toolName, args, session, done, tool, decision, tier);
@@ -371,6 +400,13 @@ public class RequestDispatcher {
     private void invokeApproved(String toolName, JsonObject args, ClientSession session,
                                 BiConsumer<JsonObject, ToolException> done, Tool tool,
                                 AgentToolApproval.Decision decision, CallTier.Tier tier) {
+        if (shuttingDown) {
+            ToolException te = new ToolException("SERVER_STOPPING", "Tool executor is shutting down");
+            CallTier.with(tier, () -> AuditLog.record(toolName, args, decision, false,
+                    te.code(), te.getMessage(), null));
+            done.accept(null, te);
+            return;
+        }
         Runnable body = () -> CallTier.with(tier, () -> {
             try {
                 JsonObject result = tool.invoke(args, session);
@@ -392,9 +428,12 @@ public class RequestDispatcher {
             try {
                 workers.execute(body);
             } catch (RejectedExecutionException rex) {
-                // Pool is shut down (server stopping). Fall back to the server thread so the call
-                // still gets a structured answer instead of hanging.
-                mc.execute(body);
+                // The server is stopping. Do not enqueue onto its thread: that queue may never
+                // drain once the lifecycle event starts tearing the server down.
+                ToolException te = new ToolException("SERVER_STOPPING", "Tool executor is shutting down");
+                CallTier.with(tier, () -> AuditLog.record(toolName, args, decision, false,
+                        te.code(), te.getMessage(), null));
+                done.accept(null, te);
             }
             return;
         }
@@ -403,6 +442,7 @@ public class RequestDispatcher {
 
     /** Shuts the off-thread worker pool down. Called from the server-stopping hook. */
     public void shutdownWorkers() {
+        shuttingDown = true;
         workers.shutdownNow();
     }
 
@@ -416,4 +456,41 @@ public class RequestDispatcher {
     }
 
     public record RegisteredEntry(String modId, String fullName, Tool tool) {}
+
+    private static class AddonToolWrapper implements Tool {
+        private final String name;
+        private final Tool delegate;
+
+        private AddonToolWrapper(String name, Tool delegate) {
+            this.name = name;
+            this.delegate = delegate;
+        }
+
+        @Override public String name() { return name; }
+        @Override public JsonObject invoke(JsonObject args, ClientSession session) throws ToolException {
+            return delegate.invoke(args, session);
+        }
+        @Override public String description() { return delegate.description(); }
+        @Override public JsonObject inputSchema() { return delegate.inputSchema(); }
+        @Override public boolean offThread() { return delegate.offThread(); }
+        @Override public void declareScope(JsonObject args) { delegate.declareScope(args); }
+    }
+
+    private static final class SliceableAddonToolWrapper extends AddonToolWrapper
+            implements TaskContext.Sliceable {
+        private final TaskContext.Sliceable sliceable;
+
+        private SliceableAddonToolWrapper(String name, Tool delegate, TaskContext.Sliceable sliceable) {
+            super(name, delegate);
+            this.sliceable = sliceable;
+        }
+
+        @Override public JsonObject invokeSliced(JsonObject args, TaskContext ctx) throws ToolException {
+            return sliceable.invokeSliced(args, ctx);
+        }
+
+        @Override public long estimateUnits(JsonObject args) {
+            return sliceable.estimateUnits(args);
+        }
+    }
 }

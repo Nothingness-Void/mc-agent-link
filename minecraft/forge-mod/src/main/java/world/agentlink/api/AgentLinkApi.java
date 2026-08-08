@@ -4,7 +4,6 @@ import world.agentlink.config.AgentLinkConfig;
 import world.agentlink.dispatch.RequestDispatcher;
 import world.agentlink.dispatch.Tool;
 
-import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
 
@@ -35,6 +34,139 @@ public final class AgentLinkApi {
 
     private AgentLinkApi() {}
 
+    private static final AgentRequestApi REQUESTS = new AgentRequestApi();
+    private static final AgentEventApi EVENTS = new AgentEventApi();
+    private static final AgentTaskApi TASKS = new AgentTaskApi();
+    private static final AgentServerApi SERVER = new AgentServerApi();
+    private static final AgentDiagnosticsApi DIAGNOSTICS = new AgentDiagnosticsApi();
+    private static final AgentBuildZoneApi BUILD_ZONES = new AgentBuildZoneApi();
+    private static final AgentRoleApi ROLES = new AgentRoleApi();
+    private static final AgentMessageApi MESSAGES = new AgentMessageApi();
+    private static final AgentNbtApi NBT = new AgentNbtApi();
+    private static final AgentItemApi ITEMS = new AgentItemApi();
+    private static final AgentPlayerApi PLAYERS = new AgentPlayerApi();
+    private static final AgentInventoryApi INVENTORY = new AgentInventoryApi();
+    private static final AgentEffectApi EFFECTS = new AgentEffectApi();
+    private static final AgentEntityApi ENTITIES = new AgentEntityApi();
+    private static final AgentEntitySpawnApi ENTITY_SPAWN = new AgentEntitySpawnApi();
+    private static final AgentWorldApi WORLDS = new AgentWorldApi();
+    private static final AgentChunkApi CHUNKS = new AgentChunkApi();
+    private static final AgentScoreboardApi SCOREBOARDS = new AgentScoreboardApi();
+    private static final AgentServerControlApi SERVER_CONTROL = new AgentServerControlApi();
+    private static final AgentContainerApi CONTAINERS = new AgentContainerApi();
+    private static final AgentProgressionApi PROGRESSION = new AgentProgressionApi();
+    private static final AgentBlockApi BLOCKS = new AgentBlockApi();
+
+    /** Shared in-game request queue and request-owner notifications. */
+    public static AgentRequestApi requests() {
+        return REQUESTS;
+    }
+
+    /** Event history and live event publication facade. */
+    public static AgentEventApi events() {
+        return EVENTS;
+    }
+
+    /** Task status and cooperative cancellation facade. */
+    public static AgentTaskApi tasks() {
+        return TASKS;
+    }
+
+    /** Server lifecycle and main-thread bridge. */
+    public static AgentServerApi server() {
+        return SERVER;
+    }
+
+    /** Bounded server health snapshots and conservative candidate diagnosis. */
+    public static AgentDiagnosticsApi diagnostics() {
+        return DIAGNOSTICS;
+    }
+
+    /** Read-only operator-declared build-zone geometry. */
+    public static AgentBuildZoneApi buildZones() {
+        return BUILD_ZONES;
+    }
+
+    /** Shared admin/guest identity queries. */
+    public static AgentRoleApi roles() {
+        return ROLES;
+    }
+
+    /** Chat delivery for addon status and player-facing actions. */
+    public static AgentMessageApi messages() {
+        return MESSAGES;
+    }
+
+    /** Lossless SNBT/JSON conversion and vanilla NBT-path operations. */
+    public static AgentNbtApi nbt() {
+        return NBT;
+    }
+
+    /** Vanilla item-spec parser shared by tools and addon mods. */
+    public static AgentItemApi items() {
+        return ITEMS;
+    }
+
+    /** Online player lookup and operator/ban/whitelist administration. */
+    public static AgentPlayerApi players() {
+        return PLAYERS;
+    }
+
+    /** Slot-level player inventory operations with client synchronization. */
+    public static AgentInventoryApi inventory() {
+        return INVENTORY;
+    }
+
+    /** Typed status-effect lookup and application for living entities. */
+    public static AgentEffectApi effects() {
+        return EFFECTS;
+    }
+
+    /** Loaded-entity lookup and typed entity controls. */
+    public static AgentEntityApi entities() {
+        return ENTITIES;
+    }
+
+    /** Native entity creation with optional NBT and common mob initialization controls. */
+    public static AgentEntitySpawnApi entitySpawn() {
+        return ENTITY_SPAWN;
+    }
+
+    /** Dimension lookup and typed spawn/world-border controls. */
+    public static AgentWorldApi worlds() {
+        return WORLDS;
+    }
+
+    /** Force-loaded chunk lifecycle operations. */
+    public static AgentChunkApi chunks() {
+        return CHUNKS;
+    }
+
+    /** Scoreboard objectives, scores, display slots, and teams. */
+    public static AgentScoreboardApi scoreboards() {
+        return SCOREBOARDS;
+    }
+
+    /** Save, reload, stop, and runtime-distance controls. */
+    public static AgentServerControlApi serverControl() {
+        return SERVER_CONTROL;
+    }
+
+    /** Typed block-container slot operations. */
+    public static AgentContainerApi containers() {
+        return CONTAINERS;
+    }
+
+    /** Player recipes and advancement progress. */
+    public static AgentProgressionApi progression() {
+        return PROGRESSION;
+    }
+
+    /** Native block parser, undoable single writes, fills, and undo-stack access. */
+    public static AgentBlockApi blocks() {
+        return BLOCKS;
+    }
+
     // ---------- Tool registration ----------
 
     /**
@@ -52,18 +184,12 @@ public final class AgentLinkApi {
 
     /** Player UUIDs configured under {@code [roles].admin_uuids} in agent-link.toml. */
     public static List<UUID> adminUuids() {
-        AgentLinkConfig.Snapshot snap = AgentLinkConfig.get();
-        if (snap == null) return Collections.emptyList();
-        List<UUID> list = snap.roleAdminUuids();
-        return list == null ? Collections.emptyList() : list;
+        return roles().adminUuids();
     }
 
     /** Player UUIDs configured under {@code [roles].guest_uuids}. May be empty when unset. */
     public static List<UUID> guestUuids() {
-        AgentLinkConfig.Snapshot snap = AgentLinkConfig.get();
-        if (snap == null) return Collections.emptyList();
-        List<UUID> list = snap.roleGuestUuids();
-        return list == null ? Collections.emptyList() : list;
+        return roles().guestUuids();
     }
 
     /**
@@ -71,8 +197,7 @@ public final class AgentLinkApi {
      * false for null UUIDs and when the admin list is empty.
      */
     public static boolean isAdmin(UUID uuid) {
-        if (uuid == null) return false;
-        return adminUuids().contains(uuid);
+        return roles().isAdmin(uuid);
     }
 
     /**
@@ -81,11 +206,17 @@ public final class AgentLinkApi {
      * NOT an admin. Returns false when the admin list is empty (no role enforcement).
      */
     public static boolean isGuest(UUID uuid) {
-        if (uuid == null) return false;
-        if (guestUuids().contains(uuid)) return true;
-        List<UUID> admins = adminUuids();
-        if (admins.isEmpty()) return false;
-        return !admins.contains(uuid);
+        return roles().isGuest(uuid);
+    }
+
+    /** Effective in-game role for an identity and its vanilla permission level. */
+    public static AgentRoleApi.Role role(UUID uuid, boolean hasOpPermission) {
+        return roles().role(uuid, hasOpPermission);
+    }
+
+    /** True when an identity may use an in-game Agent command or GUI. */
+    public static boolean canInteract(UUID uuid, boolean hasOpPermission) {
+        return roles().canInteract(uuid, hasOpPermission);
     }
 
     // ---------- Config snapshot ----------
@@ -114,12 +245,12 @@ public final class AgentLinkApi {
      * spatial are eligible for the geometric exemption.
      */
     public static boolean isInBuildZone(String dimension, int x, int y, int z) {
-        return world.agentlink.sandbox.BuildZones.findPoint(dimension, x, y, z) != null;
+        return buildZones().containsPoint(dimension, x, y, z);
     }
 
     /** Whether the operator configured any build zones at all. */
     public static boolean buildZonesConfigured() {
-        return world.agentlink.sandbox.BuildZones.anyConfigured();
+        return buildZones().configured();
     }
 
     /** Stable subset of the internal {@code AgentLinkConfig.Snapshot}. */

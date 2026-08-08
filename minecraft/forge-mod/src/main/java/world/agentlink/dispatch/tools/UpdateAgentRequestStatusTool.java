@@ -2,11 +2,14 @@ package world.agentlink.dispatch.tools;
 
 import com.google.gson.JsonObject;
 import net.minecraft.server.MinecraftServer;
-import world.agentlink.agent.AgentRequestBuffer;
+import world.agentlink.api.AgentLinkApi;
+import world.agentlink.api.AgentRequestApi;
 import world.agentlink.dispatch.RequestDispatcher;
 import world.agentlink.dispatch.Tool;
 import world.agentlink.dispatch.ToolException;
 import world.agentlink.transport.ClientSession;
+
+import java.util.Locale;
 
 public class UpdateAgentRequestStatusTool implements Tool {
 
@@ -32,22 +35,36 @@ public class UpdateAgentRequestStatusTool implements Tool {
                 : rawStatus;
         boolean notifyPlayer = !args.has("notify_player") || args.get("notify_player").getAsBoolean();
 
-        AgentRequestBuffer.Status status;
+        AgentRequestApi.Status status;
         try {
-            status = AgentRequestBuffer.parseStatus(rawStatus);
+            status = AgentRequestApi.Status.valueOf(rawStatus.trim().toUpperCase(Locale.ROOT));
         } catch (IllegalArgumentException e) {
             throw new ToolException("INVALID_ARGS", "Unknown status: " + rawStatus);
         }
 
-        AgentRequestBuffer.Entry entry = AgentRequestBuffer.get().updateStatus(id, status, message);
-        if (entry == null) throw new ToolException("INVALID_ARGS", "Unknown agent request id: " + id);
+        AgentRequestApi requests = AgentLinkApi.requests();
+        AgentRequestApi.Mutation mutation = requests.updateStatusDetailed(id, status, message);
+        if (mutation.outcome() != AgentRequestApi.MutationOutcome.UPDATED) {
+            throw mutationError(id, mutation.outcome());
+        }
+        AgentRequestApi.Request entry = mutation.request();
         if (notifyPlayer && message != null && !message.isBlank()) {
-            AgentRequestBuffer.sendStatusToPlayer(mc, entry);
+            requests.sendStatusToPlayer(mc, entry);
         }
 
         JsonObject r = new JsonObject();
         r.addProperty("updated", true);
-        r.add("request", AgentRequestBuffer.get().toJson(entry));
+        r.add("request", requests.toJson(entry));
         return r;
+    }
+
+    private static ToolException mutationError(String id, AgentRequestApi.MutationOutcome outcome) {
+        return switch (outcome) {
+            case NOT_FOUND -> new ToolException("INVALID_ARGS", "Unknown agent request id: " + id);
+            case LEASED -> new ToolException("REQUEST_BUSY", "Agent request is owned by another worker: " + id);
+            case ALREADY_TERMINAL -> new ToolException("REQUEST_TERMINAL", "Agent request is already terminal: " + id);
+            case INVALID_TRANSITION -> new ToolException("INVALID_STATE", "Invalid request status transition: " + id);
+            default -> new ToolException("INVALID_STATE", "Agent request was not updated: " + id);
+        };
     }
 }

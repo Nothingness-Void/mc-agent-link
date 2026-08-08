@@ -5,12 +5,13 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.Entity;
+import world.agentlink.api.AgentApiException;
+import world.agentlink.api.AgentEntityApi;
+import world.agentlink.api.AgentLinkApi;
 import world.agentlink.dispatch.Tool;
 import world.agentlink.dispatch.ToolArgs;
 import world.agentlink.dispatch.ToolException;
 import world.agentlink.transport.ClientSession;
-
-import java.util.Collections;
 
 /**
  * Move a player or entity, optionally across dimensions.
@@ -46,9 +47,6 @@ public class TeleportTool implements Tool {
         ServerLevel targetLevel = args.has("dim")
                 ? Dimensions.resolve(mc, args)
                 : (ServerLevel) subject.level();
-
-        double fromX = subject.getX(), fromY = subject.getY(), fromZ = subject.getZ();
-        String fromDim = subject.level().dimension().location().toString();
 
         double x, y, z;
         float yaw = subject.getYRot();
@@ -94,18 +92,11 @@ public class TeleportTool implements Tool {
                             + "'s build range (" + minY + ".." + maxY + ")");
         }
 
-        boolean crossDim = targetLevel != subject.level();
-        if (subject instanceof ServerPlayer player) {
-            player.teleportTo(targetLevel, x, y, z, Collections.emptySet(), yaw, pitch);
-        } else if (crossDim) {
-            subject.changeDimension(targetLevel);
-            subject.teleportTo(x, y, z);
-            subject.setYRot(yaw);
-            subject.setXRot(pitch);
-        } else {
-            subject.teleportTo(x, y, z);
-            subject.setYRot(yaw);
-            subject.setXRot(pitch);
+        AgentEntityApi.TeleportResult moved;
+        try {
+            moved = AgentLinkApi.entities().teleport(subject, targetLevel, x, y, z, yaw, pitch);
+        } catch (AgentApiException ex) {
+            throw new ToolException(ex.code(), ex.getMessage());
         }
 
         JsonObject r = new JsonObject();
@@ -113,16 +104,16 @@ public class TeleportTool implements Tool {
         r.addProperty("type", subject.getType().builtInRegistryHolder().key().location().toString());
         if (subject instanceof ServerPlayer sp) r.addProperty("name", sp.getGameProfile().getName());
         JsonObject from = new JsonObject();
-        from.addProperty("dim", fromDim);
-        from.addProperty("x", fromX); from.addProperty("y", fromY); from.addProperty("z", fromZ);
+        from.addProperty("dim", moved.fromDimension());
+        from.addProperty("x", moved.fromX()); from.addProperty("y", moved.fromY()); from.addProperty("z", moved.fromZ());
         r.add("from", from);
         JsonObject to = new JsonObject();
-        to.addProperty("dim", Dimensions.idOf(targetLevel));
-        to.addProperty("x", subject.getX()); to.addProperty("y", subject.getY()); to.addProperty("z", subject.getZ());
-        to.addProperty("yaw", subject.getYRot());
-        to.addProperty("pitch", subject.getXRot());
+        to.addProperty("dim", moved.dimension());
+        to.addProperty("x", moved.x()); to.addProperty("y", moved.y()); to.addProperty("z", moved.z());
+        to.addProperty("yaw", moved.yaw());
+        to.addProperty("pitch", moved.pitch());
         r.add("to", to);
-        r.addProperty("cross_dimension", crossDim);
+        r.addProperty("cross_dimension", moved.crossDimension());
         r.addProperty("resolved_by", how);
         return r;
     }

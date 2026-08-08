@@ -7,6 +7,7 @@ import world.agentlink.dispatch.ToolException;
 import java.io.IOException;
 import java.nio.file.FileSystems;
 import java.nio.file.Path;
+import java.nio.file.LinkOption;
 import java.nio.file.PathMatcher;
 import java.util.ArrayList;
 import java.util.List;
@@ -44,7 +45,31 @@ public final class ServerPaths {
         if (!target.startsWith(root)) {
             throw new ToolException("INVALID_ARGS", "Path escapes server root: " + rel);
         }
+        verifyRealBoundary(root, target, rel);
         return target;
+    }
+
+    /**
+     * Normalize() does not resolve symlinks or Windows junctions. Check the real existing ancestor
+     * so a path such as {@code logs/link/outside.txt} cannot escape the server root.
+     */
+    private static void verifyRealBoundary(Path root, Path target, String original) throws ToolException {
+        try {
+            Path realRoot = root.toRealPath();
+            Path existing = target;
+            while (existing != null && !java.nio.file.Files.exists(existing, LinkOption.NOFOLLOW_LINKS)) {
+                existing = existing.getParent();
+            }
+            if (existing == null || !existing.toRealPath().startsWith(realRoot)) {
+                throw new ToolException("INVALID_ARGS", "Path resolves outside server root: " + original);
+            }
+            if (java.nio.file.Files.exists(target, LinkOption.NOFOLLOW_LINKS)
+                    && !target.toRealPath().startsWith(realRoot)) {
+                throw new ToolException("INVALID_ARGS", "Path resolves outside server root: " + original);
+            }
+        } catch (IOException e) {
+            throw new ToolException("INVALID_ARGS", "Cannot resolve path safely: " + original);
+        }
     }
 
     /**

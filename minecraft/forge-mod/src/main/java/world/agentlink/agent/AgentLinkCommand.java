@@ -6,9 +6,11 @@ import net.minecraft.ChatFormatting;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.network.chat.Component;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraftforge.event.RegisterCommandsEvent;
 import world.agentlink.approval.AgentToolApproval;
 import world.agentlink.audit.AuditLog;
+import world.agentlink.api.AgentLinkApi;
 import world.agentlink.config.AgentLinkConfig;
 import world.agentlink.i18n.AgentLinkLang;
 import world.agentlink.transport.mcp.IssuedTokens;
@@ -30,7 +32,7 @@ public final class AgentLinkCommand {
 
     public static void register(RegisterCommandsEvent event, Supplier<McpHttpServer> mcpServer) {
         event.getDispatcher().register(Commands.literal("agentlink")
-                .requires(source -> source.hasPermission(2))
+                .requires(AgentLinkCommand::canUseInGameCommand)
                 .then(Commands.literal("pair")
                         .executes(ctx -> refreshPairLink(ctx.getSource(), mcpServer, IssuedTokens.Tier.CONSOLE)))
                 .then(Commands.literal("pair-guest")
@@ -188,8 +190,7 @@ public final class AgentLinkCommand {
 
     /**
      * /agentlink audit tail/path is admin-gated when admin_uuids is configured.
-     * When admin_uuids is empty, fall back to OP-level (already enforced by
-     * the .requires(hasPermission(2)) on the root) — same legacy behavior as
+     * When admin_uuids is empty, fall back to OP-level — same legacy behavior as
      * tools without admin scoping.
      */
     private static boolean checkAuditPermission(CommandSourceStack source) {
@@ -221,6 +222,12 @@ public final class AgentLinkCommand {
 
     private static boolean isConsole(CommandSourceStack source) {
         return source.getEntity() == null;
+    }
+
+    private static boolean canUseInGameCommand(CommandSourceStack source) {
+        if (isConsole(source) || source.hasPermission(2)) return true;
+        ServerPlayer player = source.getPlayer();
+        return player != null && AgentLinkApi.isAdmin(player.getUUID());
     }
 
     private static String prefix(CommandSourceStack source, String key, Object... args) {

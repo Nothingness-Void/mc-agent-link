@@ -79,6 +79,7 @@ public class SetBlockTool implements Tool {
         r.addProperty("block", BlockWriter.idOf(parsed.state()));
         r.addProperty("previous_block", before);
         r.addProperty("changed", changed);
+        r.addProperty("operation_id", batch.operationId());
         r.addProperty("undo_depth", BlockWriter.undoDepth());
         return r;
     }

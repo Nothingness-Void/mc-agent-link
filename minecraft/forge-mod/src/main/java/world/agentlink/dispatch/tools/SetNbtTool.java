@@ -10,10 +10,11 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.entity.BlockEntity;
+import world.agentlink.api.AgentApiException;
+import world.agentlink.api.AgentLinkApi;
 import world.agentlink.dispatch.Tool;
 import world.agentlink.dispatch.ToolArgs;
 import world.agentlink.dispatch.ToolException;
-import world.agentlink.nbt.NbtJson;
 import world.agentlink.transport.ClientSession;
 
 /**
@@ -37,7 +38,7 @@ import world.agentlink.transport.ClientSession;
  *
  * <p>Prefer {@code snbt} over {@code value} for the payload: JSON cannot express a byte vs an int,
  * and {@code Count:1} where vanilla expects {@code Count:1b} yields an item that silently vanishes.
- * See {@link NbtJson}.
+ * See {@link world.agentlink.api.AgentNbtApi}.
  *
  * <h2>What this will not do</h2>
  * Refuses to touch {@code UUID}, {@code Pos}, {@code id} and a few other structural keys on
@@ -100,9 +101,13 @@ public class SetNbtTool implements Tool {
     /** SNBT takes precedence; JSON {@code value} is the convenience path. */
     private Tag readPayload(JsonObject args) throws ToolException {
         String snbt = ToolArgs.optString(args, "snbt", null);
-        if (snbt != null && !snbt.isBlank()) return NbtJson.parseSnbtValue(snbt);
+        if (snbt != null && !snbt.isBlank()) return parseSnbt(snbt);
         if (args.has("value") && !args.get("value").isJsonNull()) {
-            return NbtJson.fromJson(args.get("value"));
+            try {
+                return AgentLinkApi.nbt().fromJson(args.get("value"));
+            } catch (AgentApiException ex) {
+                throw new ToolException(ex.code(), ex.getMessage());
+            }
         }
         throw new ToolException("INVALID_ARGS",
                 "Provide `snbt` (preferred, type-exact) or `value` (JSON; ints and doubles only)");
@@ -154,7 +159,7 @@ public class SetNbtTool implements Tool {
         r.addProperty("mode", mode);
         if (hasPath) r.addProperty("path", path);
         r.addProperty("applied", true);
-        r.add("nbt_after", NbtJson.toJson(be.saveWithFullMetadata()));
+        r.add("nbt_after", AgentLinkApi.nbt().toJson(be.saveWithFullMetadata()));
         return r;
     }
 
@@ -249,7 +254,7 @@ public class SetNbtTool implements Tool {
             return working;
         }
 
-        var compiled = NbtJson.parsePath(path);
+        var compiled = parsePath(path);
         try {
             if ("set".equals(mode)) {
                 int changed = compiled.set(working, payload);
@@ -286,6 +291,23 @@ public class SetNbtTool implements Tool {
                     "Could not apply path \"" + path + "\": " + ex.getMessage());
         }
         return working;
+    }
+
+    private static Tag parseSnbt(String snbt) throws ToolException {
+        try {
+            return AgentLinkApi.nbt().parseValue(snbt);
+        } catch (AgentApiException ex) {
+            throw new ToolException(ex.code(), ex.getMessage());
+        }
+    }
+
+    private static net.minecraft.commands.arguments.NbtPathArgument.NbtPath parsePath(String path)
+            throws ToolException {
+        try {
+            return AgentLinkApi.nbt().parsePath(path);
+        } catch (AgentApiException ex) {
+            throw new ToolException(ex.code(), ex.getMessage());
+        }
     }
 
     /**

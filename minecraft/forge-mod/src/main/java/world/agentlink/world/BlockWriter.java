@@ -20,6 +20,7 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Native block writing with an undo stack — no WorldEdit required.
@@ -52,6 +53,7 @@ public final class BlockWriter {
 
     private static final Deque<Change> UNDO_STACK = new ArrayDeque<>();
     private static final Object UNDO_LOCK = new Object();
+    private static final AtomicLong OPERATION_SEQUENCE = new AtomicLong();
 
     private BlockWriter() {}
 
@@ -60,13 +62,16 @@ public final class BlockWriter {
 
     /** One undoable operation. {@code label} is what shows up in {@code undo_blocks} output. */
     public static final class Change {
+        private final String operationId;
         private final String label;
         private final ServerLevel level;
         private final List<PriorBlock> prior;
         private final long createdAtMs;
         private final boolean truncated;
 
-        Change(String label, ServerLevel level, List<PriorBlock> prior, boolean truncated) {
+        Change(String operationId, String label, ServerLevel level, List<PriorBlock> prior,
+               boolean truncated) {
+            this.operationId = operationId;
             this.label = label;
             this.level = level;
             this.prior = prior;
@@ -74,6 +79,7 @@ public final class BlockWriter {
             this.truncated = truncated;
         }
 
+        public String operationId() { return operationId; }
         public String label() { return label; }
         public int size() { return prior.size(); }
         public long createdAtMs() { return createdAtMs; }
@@ -98,14 +104,18 @@ public final class BlockWriter {
         private int changed;
         private int skipped;
         private boolean truncated;
+        private final String operationId;
+        private boolean finished;
 
         public Batch(ServerLevel level, String label, boolean captureUndo) {
             this.level = level;
             this.label = label;
             this.captureUndo = captureUndo;
+            this.operationId = nextOperationId();
         }
 
         public ServerLevel level() { return level; }
+        public String operationId() { return operationId; }
         public int changed() { return changed; }
         public int skipped() { return skipped; }
 
@@ -116,6 +126,7 @@ public final class BlockWriter {
          * honest (it only contains blocks we really touched) and avoids pointless chunk dirtying.
          */
         public boolean set(BlockPos pos, BlockState state, CompoundTag blockEntityNbt) {
+            if (finished) throw new IllegalStateException("batch is already finished");
             if (!level.isInWorldBounds(pos)) {
                 skipped++;
                 return false;
@@ -161,6 +172,7 @@ public final class BlockWriter {
          * single tick — exactly the stall the slicing exists to avoid.
          */
         public int flushUpdates() {
+            if (finished) throw new IllegalStateException("batch is already finished");
             if (pendingUpdates.isEmpty()) return 0;
             int n = pendingUpdates.size();
             for (BlockPos pos : pendingUpdates) {
@@ -175,10 +187,24 @@ public final class BlockWriter {
          * Always call this, even on a partially-completed edit, or the undo entry is lost.
          */
         public Change commit() {
-            Change change = new Change(label, level, prior, truncated);
-            if (captureUndo && !prior.isEmpty()) push(change);
+            if (finished) throw new IllegalStateException("batch is already finished");
+            Change change = new Change(operationId, label, level, List.copyOf(prior), truncated);
             flushUpdates();
+            finished = true;
+            if (captureUndo && !prior.isEmpty()) push(change);
             return change;
+        }
+
+        /**
+         * Abort the batch and restore everything written by it without adding an undo entry.
+         * This is used by cooperative task cancellation so a cancelled high-level operation does
+         * not leave an untracked half-built structure in the world.
+         */
+        public int abort() {
+            if (finished) throw new IllegalStateException("batch is already finished");
+            finished = true;
+            pendingUpdates.clear();
+            return restore(level, prior);
         }
     }
 
@@ -207,6 +233,9 @@ public final class BlockWriter {
     public record UndoResult(int operationsUndone, int blocksRestored, int remainingDepth,
                              List<String> labels) {}
 
+    public record OperationUndoResult(String operationId, String label, int blocksRestored,
+                                      int remainingDepth) {}
+
     /**
      * Pop and reverse the most recent {@code steps} operations.
      *
@@ -232,21 +261,57 @@ public final class BlockWriter {
         return new UndoResult(ops, blocks, undoDepth(), labels);
     }
 
+    /**
+     * Reverse one named operation. Only the newest operation may be named explicitly; allowing a
+     * middle entry to be removed would restore stale prior states over newer edits.
+     */
+    public static OperationUndoResult undoOperation(String operationId) throws ToolException {
+        if (operationId == null || operationId.isBlank()) {
+            throw new ToolException("INVALID_ARGS", "operation_id is required");
+        }
+        Change change;
+        synchronized (UNDO_LOCK) {
+            change = UNDO_STACK.peekFirst();
+            if (change == null) {
+                throw new ToolException("NOTHING_TO_UNDO", "The native block-write undo stack is empty");
+            }
+            if (!operationId.equals(change.operationId())) {
+                boolean found = UNDO_STACK.stream().anyMatch(c -> operationId.equals(c.operationId()));
+                throw new ToolException(found ? "OPERATION_NOT_TOP" : "NOT_FOUND",
+                        found
+                                ? "operation_id is not the newest native edit; undo newer operations first"
+                                : "No native block operation matches operation_id: " + operationId);
+            }
+            UNDO_STACK.removeFirst();
+        }
+        int restored = restore(change);
+        return new OperationUndoResult(change.operationId(), change.label(), restored, undoDepth());
+    }
+
     private static int restore(Change change) {
+        return restore(change.level, change.prior);
+    }
+
+    private static int restore(ServerLevel level, List<PriorBlock> prior) {
         int restored = 0;
-        ServerLevel level = change.level;
         // Reverse order so overlapping writes within one batch unwind correctly.
-        for (int i = change.prior.size() - 1; i >= 0; i--) {
-            PriorBlock p = change.prior.get(i);
+        for (int i = prior.size() - 1; i >= 0; i--) {
+            PriorBlock p = prior.get(i);
             if (level.getBlockEntity(p.pos()) != null) level.removeBlockEntity(p.pos());
             level.setBlock(p.pos(), p.state(), Block.UPDATE_CLIENTS);
             if (p.blockEntityNbt() != null) applyBlockEntityNbt(level, p.pos(), p.blockEntityNbt());
             restored++;
         }
-        for (PriorBlock p : change.prior) {
+        for (PriorBlock p : prior) {
             level.blockUpdated(p.pos(), p.state().getBlock());
         }
         return restored;
+    }
+
+    private static String nextOperationId() {
+        long sequence = OPERATION_SEQUENCE.incrementAndGet();
+        return "op-" + Long.toUnsignedString(System.currentTimeMillis(), 36)
+                + "-" + Long.toUnsignedString(sequence, 36);
     }
 
     // ------------------------------------------------------------------ helpers
@@ -334,6 +399,7 @@ public final class BlockWriter {
     /** Shared summary fields so every write tool reports the same shape. */
     public static JsonObject describe(Batch batch, ToolArgs.Box box) {
         JsonObject r = new JsonObject();
+        r.addProperty("operation_id", batch.operationId());
         r.addProperty("dim", batch.level().dimension().location().toString());
         r.addProperty("changed", batch.changed());
         r.addProperty("skipped", batch.skipped());

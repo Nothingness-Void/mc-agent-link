@@ -24,6 +24,13 @@ public class ThreadDumpTool implements Tool {
     }
 
     @Override
+    public boolean offThread() {
+        // JVM introspection can pause while collecting monitor data; never run it on the tick
+        // thread, especially when an agent asks for a full diagnosis.
+        return true;
+    }
+
+    @Override
     public JsonObject invoke(JsonObject args, ClientSession session) {
         int maxFrames = args.has("max_frames") ? args.get("max_frames").getAsInt() : DEFAULT_FRAMES;
         if (maxFrames <= 0) maxFrames = DEFAULT_FRAMES;

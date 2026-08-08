@@ -8,11 +8,14 @@ import net.minecraftforge.event.server.ServerStoppingEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.event.lifecycle.FMLCommonSetupEvent;
+import net.minecraft.server.MinecraftServer;
 import org.slf4j.Logger;
 import world.agentlink.agent.AgentLinkCommand;
 import world.agentlink.approval.AgentToolApproval;
 import world.agentlink.audit.AuditLog;
 import world.agentlink.config.AgentLinkConfig;
+import world.agentlink.diagnostics.IncidentLedger;
+import world.agentlink.diagnostics.TickIncidentRecorder;
 import world.agentlink.transport.AgentLinkServer;
 import world.agentlink.transport.mcp.McpHttpServer;
 
@@ -20,6 +23,7 @@ import world.agentlink.transport.mcp.McpHttpServer;
 public class AgentLinkMod {
     public static final String MOD_ID = "agentlink";
     public static final Logger LOG = LogUtils.getLogger();
+    private static volatile MinecraftServer currentServer;
 
     private AgentLinkServer server;
     private McpHttpServer mcpServer;
@@ -37,7 +41,9 @@ public class AgentLinkMod {
 
     @SubscribeEvent
     public void onServerStarted(ServerStartedEvent event) {
+        currentServer = event.getServer();
         var cfg = AgentLinkConfig.get();
+        IncidentLedger.start(event.getServer());
         AgentToolApproval.start(event.getServer(), cfg);
         if (cfg.auditEnabled()) {
             AuditLog.start(event.getServer());
@@ -74,6 +80,9 @@ public class AgentLinkMod {
 
     @SubscribeEvent
     public void onServerStopping(ServerStoppingEvent event) {
+        currentServer = null;
+        TickIncidentRecorder.stop(event.getServer());
+        IncidentLedger.stopCurrent(true);
         // Stop accepting work before the world starts tearing down: a task mid-slice would
         // otherwise keep writing blocks into a level that is being unloaded.
         world.agentlink.task.TaskManager.stop();
@@ -95,5 +104,10 @@ public class AgentLinkMod {
                 LOG.warn("agent-link shutdown error", e);
             }
         }
+    }
+
+    /** Internal lifecycle hook used by the stable {@code world.agentlink.api} facade. */
+    public static MinecraftServer currentServer() {
+        return currentServer;
     }
 }

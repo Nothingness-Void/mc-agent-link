@@ -1,7 +1,8 @@
 package world.agentlink.dispatch.tools;
 
 import com.google.gson.JsonObject;
-import world.agentlink.agent.AgentRequestBuffer;
+import world.agentlink.api.AgentLinkApi;
+import world.agentlink.api.AgentRequestApi;
 import world.agentlink.dispatch.Tool;
 import world.agentlink.dispatch.ToolException;
 import world.agentlink.transport.ClientSession;
@@ -18,7 +19,7 @@ public class AgentHeartbeatTool implements Tool {
         String action = args.has("action") && !args.get("action").isJsonNull()
                 ? args.get("action").getAsString()
                 : "heartbeat";
-        AgentRequestBuffer buf = AgentRequestBuffer.get();
+        AgentRequestApi buf = AgentLinkApi.requests();
         buf.markAgentSeen(action);
 
         JsonObject r = new JsonObject();

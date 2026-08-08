@@ -6,6 +6,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Bridge for code running off the server thread that needs to touch world state.
@@ -60,8 +61,12 @@ public final class ServerThread {
         if (mc.isSameThread()) return body.run();
 
         CompletableFuture<T> fut = new CompletableFuture<>();
+        // A timed-out hop must not execute later merely because the server thread recovered. The
+        // body may still finish if it already started, but queued diagnostic probes are discarded.
+        AtomicBoolean started = new AtomicBoolean(false);
         try {
             mc.execute(() -> {
+                if (!started.compareAndSet(false, true)) return;
                 try {
                     fut.complete(body.run());
                 } catch (Throwable t) {
@@ -75,10 +80,12 @@ public final class ServerThread {
         try {
             return fut.get(timeoutMs, TimeUnit.MILLISECONDS);
         } catch (TimeoutException te) {
+            started.compareAndSet(false, true);
             throw new ToolException("SERVER_BUSY",
                     "Server thread did not run the request within " + timeoutMs + "ms");
         } catch (InterruptedException ie) {
             Thread.currentThread().interrupt();
+            started.compareAndSet(false, true);
             throw new ToolException("INTERNAL_ERROR", "Interrupted while waiting for the server thread");
         } catch (ExecutionException ee) {
             throw unwrap(ee.getCause());

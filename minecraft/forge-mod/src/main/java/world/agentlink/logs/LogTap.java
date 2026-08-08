@@ -7,6 +7,7 @@ import org.apache.logging.log4j.core.LoggerContext;
 import org.apache.logging.log4j.core.appender.AbstractAppender;
 import org.apache.logging.log4j.core.config.Configuration;
 import org.apache.logging.log4j.core.config.LoggerConfig;
+import world.agentlink.security.SensitiveDataRedactor;
 
 /**
  * Captures every line that goes through Log4j2's root logger and feeds it
@@ -37,7 +38,8 @@ public final class LogTap {
                 }
                 String logger = event.getLoggerName();
                 String level = event.getLevel().name();
-                LogBuffer.get().append(level, logger == null ? "" : logger, message == null ? "" : message);
+                LogBuffer.get().append(level, logger == null ? "" : logger,
+                        SensitiveDataRedactor.log(message == null ? "" : message));
             }
         };
         appender.start();

@@ -8,6 +8,8 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.MutableComponent;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
+import world.agentlink.api.AgentApiException;
+import world.agentlink.api.AgentLinkApi;
 import world.agentlink.dispatch.RequestDispatcher;
 import world.agentlink.dispatch.Tool;
 import world.agentlink.dispatch.ToolException;
@@ -51,14 +53,21 @@ public class BroadcastTool implements Tool {
 
         int recipients;
         if (target.isEmpty() || "@a".equalsIgnoreCase(target)) {
-            mc.getPlayerList().broadcastSystemMessage(msg, false);
-            recipients = mc.getPlayerCount();
+            try {
+                recipients = AgentLinkApi.messages().broadcast(mc, msg);
+            } catch (AgentApiException ex) {
+                throw new ToolException(ex.code(), ex.getMessage());
+            }
         } else {
             ServerPlayer player = resolveTarget(target);
             if (player == null) {
                 throw new ToolException("INVALID_ARGS", "No online player matching target: " + target);
             }
-            player.sendSystemMessage(msg);
+            try {
+                AgentLinkApi.messages().send(player, msg);
+            } catch (AgentApiException ex) {
+                throw new ToolException(ex.code(), ex.getMessage());
+            }
             recipients = 1;
         }
 
