@@ -82,15 +82,17 @@ These MUST be implemented by any conforming server. Per-loader extensions live u
 | `get_player_info` | `{"name": "Steve"}` | `{"name","uuid","pos":[x,y,z],"dim","yaw","pitch","health","max_health","food","xp_level","gamemode","ping"}` |
 | `broadcast` | `{"message": "hi all", "color": "yellow"}` | `{"sent": true, "recipients": 3}` |
 | `get_server_stats` | `{}` | `{"tps":19.97,"mspt":12.4,"mem_used_mb":4096,"mem_max_mb":16384,"loaded_chunks":1234,"online":3,"max_players":20}` |
+| `server_diagnose` | optional `include_*`, `log_limit`, `max_frames`, `max_crash_bytes`, `timeout_ms` | bounded health snapshot with a total budget; returns `complete`, component status (including `timeout`), `server_stats`, `tick_profile`, timing-only `tick_incidents`, `world`, incident ledger, recent error logs, server threads, mods, newest crash summary, optional spark stats, and `diagnosis` candidate findings |
 | `get_recent_events` | `{"since_seq":0,"limit":50,"topics":["chat",...]}` | `{"events":[{"seq":N,"ts":...,"topic":"chat","data":{...}}], "returned":N, "head_seq":N, "oldest_seq":1, "buffer_capacity":4096, "truncated":false}` |
 | `get_recent_logs` | `{"since_seq":0,"limit":100,"levels":["WARN","ERROR"],"contains":"foo"}` | `{"logs":[{"seq":N,"ts":...,"level":"INFO","logger":"...","message":"..."}], "returned":N, "head_seq":N, "oldest_seq":1, "buffer_capacity":2048, "truncated":false}` |
 | `subscribe_events` | `{"topics":["chat","player_join","player_leave","player_death"]}` | `{"subscribed":["chat","player_join",...]}` |
 | `unsubscribe_events` | `{"topics":["chat"]}` | `{"unsubscribed":["chat"]}` |
 | `list_mods` | `{}` | `{"mods":[{"mod_id","display_name","version","description"}], "count":N, "loader":"forge"}` |
-| `read_server_file` | `{"path":"crash-reports/foo.txt","offset":0,"max_bytes":262144}` | `{"path","size","offset","bytes_read","truncated","encoding":"utf-8"|"base64","content"}` |
+| `read_server_file` | `{"path":"crash-reports/foo.txt","offset":0,"max_bytes":262144}` | `{"path","size","offset","bytes_read","truncated","encoding":"utf-8"|"base64","content"}`; symlink/junction paths that resolve outside the server root are rejected |
 | `list_dir` | `{"path":"config","max_entries":500}` | `{"path","entries":[{"name","is_dir","size","mtime_ms"}], "returned":N, "total":N, "truncated":false}` |
 | `write_config_file` | `{"path":"config/foo.toml","content":"...","overwrite":false,"encoding":"utf-8"}` | `{"path","bytes_written","created":true,"backup":"config/.agent-link-backup/..."}` |
 | `tick_profile` | `{}` | `{"samples":100,"avg_mspt":12.4,"max_mspt":48.9,"p50_mspt":11.0,"p95_mspt":22.0,"p99_mspt":40.0,"tps":19.97,"window_ticks":100}` |
+| `tick_incidents` | `{ "limit": 16 }` | `{"threshold_ms":50,"cooldown_ms":1000,"recent_window_ms":10000,"count":1,"total_count":1,"recent_samples":1,"incidents":[{"sequence":1,"duration_ms":120.4,"peak_ms":120.4,"sample_ticks":1}]}`; timing correlation only, not causal attribution |
 | `thread_dump` | `{"max_frames":30,"only_server":false}` | `{"threads":[{"id","name","state","lock?","lock_owner?","stack":[...],"stack_truncated"}], "count":N}` |
 | `spark_status` | `{}` | `{"installed":true,"command_available":true,"api_available":true,"profiler_info":"..."}` — never errors |
 | `spark_stats` | `{}` | `{"api_available":true,"tps":{"seconds_5":19.9,...},"mspt":{"seconds_10":{"mean","max","min","median","p95"}},"cpu_process":{...},"cpu_system":{...},"gc":{"G1 Young Generation":{...}}}` |
@@ -321,7 +323,7 @@ When `approval.enabled = true` in `config/agent-link.toml`, MCP tool calls are g
 1. `approval.auto_allow_tools` → allowed immediately
 2. `approval.trusted_tools` → allowed immediately once trusted in-game
 3. ordinary approval → shown to online OPs in Minecraft chat
-4. `approval.admin_only_tools` → shown only to players listed in `[roles].admin_uuids`
+4. `approval.admin_only_tools` → shown only to players listed in `[roles].admin_uuids` (assigned ADMINs)
 
 If `[roles].admin_uuids` is empty, tier 4 falls back to all online OPs so legacy servers still have someone who can approve.
 
@@ -333,7 +335,7 @@ The OP sees clickable buttons:
 
 `[始终允许该工具]` persists the tool name to `approval.trusted_tools`. High-impact tools such as `run_console_command`, `write_config_file`, `broadcast`, and spark profiler control are never permanently trustable and require per-call approval.
 
-The clickable commands `/agentlink approve|deny|trust <id>` use the same authorization rules as button visibility: non-admin OPs cannot manually approve an `admin_only_tools` request when `admin_uuids` is configured.
+The clickable commands `/agentlink approve|deny|trust <id>` use the same authorization rules as button visibility: ordinary OPs can approve normal requests, while only assigned ADMINs can manually approve an `admin_only_tools` request when `admin_uuids` is configured.
 
 If no eligible approver is online, an approver denies the request, or `approval.timeout_seconds` elapses, the tool returns `APPROVAL_DENIED`.
 

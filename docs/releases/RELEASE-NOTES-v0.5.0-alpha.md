@@ -9,7 +9,7 @@ This release adds a first-class write surface that always exists, an async task 
 survives client timeouts, NBT as a general escape hatch, and a geometric permission model so
 building doesn't mean clicking "allow" three hundred times.
 
-30 new tools (44 → 75). Base and addon version numbers stay unified.
+41 new tools (44 → 86). Base and addon version numbers stay unified.
 
 ---
 
@@ -101,6 +101,38 @@ before/after. Details worth calling out:
   live index, so a follow-up `get_nbt` by UUID would report `NOT_FOUND` and look like a bug
   elsewhere.
 
+## Structured operator controls
+
+The first control pass is now extended with typed operations for the parts of a live server that
+agents repeatedly need while building or debugging:
+
+- `manage_players` covers kick, player/IP bans, OP/deOP, whitelist state, and list inspection.
+- `manage_player_inventory` and `manage_container` edit player or block-container slots without
+  formatting `/item` or `/data` command strings.
+- `manage_scoreboard` edits objectives, scores, teams, display slots, and membership.
+- `control_entity` covers riding, damage/heal, motion, rotation, equipment, attributes, and guarded
+  lifecycle operations. Killing/discarding requires explicit confirmation, and players require a
+  second explicit flag.
+- `set_world_spawn`, `set_world_border`, and `server_control` expose typed world/server lifecycle
+  controls; stop is always confirmed and restart remains an external supervisor concern.
+- `set_player_state`, `manage_player_progression`, and `manage_datapacks` cover vitals/XP/abilities,
+  recipes/advancements, and data-pack selection/reload.
+
+All eleven grouped tools are admin-only by default and cannot be whole-tool trusted. Existing
+structured tools remain available for teleport, effects, entity spawning, world properties, chunk
+loading, and NBT; `run_console_command` is reserved as the explicit fallback for third-party or
+not-yet-modeled commands.
+
+## Addon Java API
+
+The stable `world.agentlink.api.AgentLinkApi` surface is now split into reusable facades for NBT,
+items, players/inventory, effects, entities/spawning, blocks/undo, chunks, worlds, messages,
+scoreboards, containers, progression, and server lifecycle, in addition to the request/event/task
+and server-thread APIs. The structured control tools and existing common tools reuse these facades
+instead of adding more parallel native implementations, so an addon can build a custom tool on the
+same validation and Minecraft 1.20.1
+operations. The full reference is bilingual: `docs/api.md` and `docs/api.zh-CN.md`.
+
 ## `whoami` — the agent can read its own boundaries
 
 Previously an agent discovered its limits by hitting them: call a tool, get `APPROVAL_DENIED`, guess
@@ -179,11 +211,29 @@ thread; `ServerLevel` is not thread-safe.
 | `tasks.max_concurrent` | `2` | Concurrent async tasks (max 8) |
 | `tasks.blocks_per_tick` | `8000` | Per-tick budget for a sliced edit (64..200000) |
 | `events.verbose_topics` | `[]` | Which high-frequency topics to record |
-| `approval.table_version` | `1` | Migration generation marker |
+| `approval.table_version` | `3` | Migration generation marker |
+
+## Diagnostics and crash-scene hardening
+
+The post-release diagnostics pass adds a total budget to `server_diagnose` (12 seconds by default,
+configurable through `timeout_ms` from 1 to 30 seconds). Each component reports `ok`, `error`, or
+`timeout`, and the top-level `complete` flag prevents an agent from treating a partial snapshot as
+complete. A timed-out server-thread probe that has not started is removed from the queue rather than
+running later after the server recovers.
+
+The mod now writes a small `diagnostics/incident-ledger.json` with a boot id, heartbeat, and clean
+shutdown marker. It contains no token, NBT, or block payload. `server_diagnose` uses it to flag a
+previous unclean shutdown, and the external watchdog preserves it together with `debug.log`, JVM
+`hs_err`/`replay` files, and process metadata. Large heap dumps are recorded as metadata only.
+
+Guest-facing config and in-memory log reads redact setup links, pair codes, bearer tokens, and
+operator identities. File sandbox resolution now checks real existing ancestors, so a symlink or
+Windows junction cannot escape the server root. The offline `tools/validate-contract.ps1` check
+guards the Java schema, Node bridge, diagnostic timeout, and watchdog parser from drifting apart.
 
 ## Verified on the test server
 
-Forge 1.20.1 + spark 1.10.53 + WorldEdit 7.2.15. All 75 tools present in `tools/list` with
+Forge 1.20.1 + spark 1.10.53 + WorldEdit 7.2.15. All 86 tools present in `tools/list` with
 descriptions and schemas. Exercised: native writes and undo round-trip, block-entity NBT placement
 and path reads/writes, snapshot save/restore with offset, a 270 000-block sliced task (p99 0.81 ms),
 cancellation with partial-write rollback, build-zone exemption plus boundary and non-spatial

@@ -1,6 +1,6 @@
 ---
 name: mc-diagnose
-description: Diagnose Minecraft server lag end-to-end. Walks tick_profile → thread_dump → optional spark profiler → mod attribution → config recommendation. Use when the user reports lag, low TPS, stutters, "feels slow", high mspt, or anything performance-related on the server connected via agent-link.
+description: Diagnose Minecraft server lag end-to-end. Starts with server_diagnose, then uses optional spark profiling, mod attribution, and config recommendation. Use when the user reports lag, low TPS, stutters, "feels slow", high mspt, or anything performance-related on the server connected via agent-link.
 ---
 
 # Minecraft lag diagnosis
@@ -9,28 +9,26 @@ Goal: identify **what** is causing tick spikes and **which mod** is responsible,
 
 ## Required tools
 
-From the `agent-link` MCP server: `tick_profile`, `thread_dump`, `list_mods`, `get_recent_logs`, `run_console_command`, `read_server_file`, `list_dir`, `write_config_file`, `spark_status`, `spark_stats`, `spark_profiler_start`, `spark_profiler_stop`, `spark_profiler_cancel`, `spark_health_report`.
+From the `agent-link` MCP server: `server_diagnose`, `tick_profile`, `thread_dump`, `list_mods`, `get_recent_logs`, `run_console_command`, `read_server_file`, `list_dir`, `write_config_file`, `spark_status`, `spark_stats`, `spark_profiler_start`, `spark_profiler_stop`, `spark_profiler_cancel`, `spark_health_report`.
 
 If MCP isn't connected, say so and stop.
 
 ## Phase 1 — Characterize the spike (parallel)
 
-Call in one round:
+Call `server_diagnose` once with the defaults. It returns the tick distribution, server-thread
+snapshot, recent warning/error logs, installed mods, newest crash summary, and a conservative
+`diagnosis.findings` list in one bounded response. Its `collection_duration_ms` is useful when
+deciding whether a slow response came from the server or the MCP host.
 
-- `tick_profile`
-- `thread_dump` with `only_server: true`, `max_frames: 30`
-- `get_recent_logs` with `levels: ["WARN", "ERROR"]`, `limit: 50`
-- `spark_status` (cheap, never errors — tells you whether to use spark in Phase 2)
-
-Decision tree from `tick_profile`:
+Decision tree from `server_diagnose.tick_profile`:
 
 - **avg ≤ 50 ms, p99 ≤ 50 ms** → server isn't actually lagging. Tell the user what you see and ask whether the lag was player-perceived (network/render) vs. server (TPS).
 - **avg > 50 ms** → steady-state overload. Likely a mod doing too much per tick, or memory pressure. Continue.
 - **avg fine, p99 ≫ avg** → spikes. Something fires occasionally and stalls a tick. Continue.
 
-If `spark_status` shows spark is installed, also call `spark_stats` for richer multi-window TPS/MSPT/CPU/GC data — read-only, very cheap.
+If the snapshot shows spark is installed, call `spark_stats` for richer multi-window TPS/MSPT/CPU/GC data — read-only, very cheap.
 
-From `thread_dump` (`Server thread`): note the top 3-5 frames. If you can already attribute to a mod's package (e.g. `com.foo.bar.SomeMod.onTick`), you have a hypothesis.
+From `server_diagnose.threads` (`Server thread`): note the top 3-5 frames. If you can already attribute to a mod's package (e.g. `com.foo.bar.SomeMod.onTick`), you have a hypothesis.
 
 ## Phase 2 — Sample with spark if available
 
@@ -45,7 +43,7 @@ If `spark_status` from Phase 1 reported `installed: true`:
 
 For a quick TPS/CPU/memory snapshot without a full sample, `spark_health_report` returns a one-shot URL.
 
-If spark is not installed, tell the user spark would give better data and continue with `thread_dump` evidence only.
+If spark is not installed, tell the user spark would give better data and continue with the snapshot's thread evidence only.
 
 ## Phase 3 — Attribute and recommend
 

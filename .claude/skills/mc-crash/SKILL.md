@@ -9,13 +9,17 @@ Goal: read the newest crash report, identify the failing mod and root-cause exce
 
 ## Required tools
 
-From the `agent-link` MCP server: `list_dir`, `read_server_file`, `list_mods`, `get_recent_logs`, `get_server_stats`.
+From the `agent-link` MCP server: `server_diagnose`, `list_dir`, `read_server_file`, `list_mods`, `get_recent_logs`, `get_server_stats`.
 
 ## Procedure
 
 ### 1. Find the report
 
-`list_dir { path: "crash-reports" }`. If empty:
+Call `server_diagnose` first. If it reports `crash_report.available: true` and `stale: false`, use its
+returned path and summary instead of listing the directory again. If the snapshot is unavailable
+because the JVM has already exited, use the external watchdog bundle or continue with `list_dir`.
+
+If no current report is reported, run `list_dir { path: "crash-reports" }`. If empty:
 
 - Try `list_dir { path: "logs" }` and look for `hs_err_pid*.log` (JVM-level) or check `read_server_file` on `logs/latest.log` for unhandled exceptions. The server may have died without writing a Forge-style crash report (e.g. OOM kill).
 - If nothing useful, tell the user there's no crash report to read and ask when the crash happened — you may need them to reproduce or share host-side dmesg.

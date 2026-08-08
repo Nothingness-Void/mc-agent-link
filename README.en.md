@@ -8,6 +8,16 @@ Lets AI agents (via the [Model Context Protocol](https://modelcontextprotocol.io
 
 [中文 README](README.md) · [Installation guide for agents](INSTALL.md) · [Wire protocol](docs/protocol.md)
 
+## Permission model
+
+The project has two permission levels:
+
+- **Backend**: a console-tier connection minted by `/agentlink pair` has every tool permission and bypasses in-game approval. Keep this token only in the administrator's trusted Codex/Claude host.
+- **In-game**: the administrator assigns the ADMIN role through `[roles].admin_uuids` in `config/agent-link.toml`; vanilla permission level `2+` is the OP role. ADMIN and OP may use `/agent` and the GUI. Ordinary players cannot open or operate Agent.
+- ADMIN may approve ordinary and admin-only tools; OP may approve ordinary tools; ordinary players cannot approve or submit Agent requests.
+
+The server repeats the permission check on the command tree, GUI packets, and request submitter. Client-side hiding is not the security boundary.
+
 ## Why
 
 Modern AI agents (Claude Code, Cursor, custom agents) speak MCP. Minecraft servers don't. RCON works but is request-only and limited. This project bridges the gap with an in-mod MCP HTTP endpoint, while retaining a WebSocket protocol for non-MCP clients and legacy bridges, so multiple agents can connect, observe, and act concurrently.
@@ -21,19 +31,37 @@ Modern AI agents (Claude Code, Cursor, custom agents) speak MCP. Minecraft serve
 | World reading | `get_world_info` `get_block` `get_blocks_region` `find_blocks` `get_biome` `raycast` `list_entities_near` `list_dimensions` | Time/weather/seed, single blocks, region RLE (≤4096), **large-region block search returning only hits**, biomes, free rays, nearby entities |
 | World writing (native, no WorldEdit) | `set_block` `fill_blocks` `set_blocks` `undo_blocks` `save_block_snapshot` `list_snapshots` `restore_block_snapshot` | Single / cuboid / arbitrary-position-set writes with blockstate properties and block-entity NBT; own undo stack; snapshot round-trip (with `offset`, a working copy-paste) |
 | NBT | `get_nbt` `set_nbt` | Raw NBT on block entities, entities, players and inventory slots with NBT-path support — enchantments, villager trades, spawners, modded internals |
-| Player & entity control | `teleport` `give_item` `set_gamemode` `apply_effect` `spawn_entity` `remove_entities` `modify_entity` | Teleport (cross-dimension, snap-to-surface), give items with NBT, game modes, status effects, spawn / clean up / edit entities |
-| World control | `set_world_property` `force_load_chunks` `save_world` | Time / weather / difficulty / gamerule writes, chunk force-loading, explicit flush to disk |
+| Player & entity control | `teleport` `give_item` `set_gamemode` `apply_effect` `spawn_entity` `remove_entities` `modify_entity` `manage_players` `manage_player_inventory` `control_entity` | Teleport (cross-dimension, snap-to-surface), give items with NBT, game modes, status effects, spawn / clean up / edit entities, player administration, slot-level inventory and entity relations / attributes |
+| Containers & player data | `manage_container` `set_player_state` `manage_player_progression` | Container slots, player health/experience/abilities, recipes and advancements |
+| World & server control | `set_world_property` `set_world_spawn` `set_world_border` `force_load_chunks` `save_world` `server_control` | Time / weather / difficulty / gamerule writes, spawn and border control, chunk force-loading, explicit flush, resource reload, view distance and confirmed stop |
+| Data packs | `manage_datapacks` | List, select, and reload data packs |
+| Scoreboard | `get_scoreboard` `manage_scoreboard` | Structured objective, score, display-slot, team and membership writes |
 | Async tasks | `start_task` `get_task` `cancel_task` `list_tasks` | Decouples long work from a single RPC: returns a task id immediately, slices across ticks, reports progress, cancellable |
 | Registries | `list_block_ids` `list_item_ids` `list_entity_ids` `list_biome_ids` | Paginated with substring filter |
 | In-game request API | `agent_heartbeat` `get_agent_requests` `update_agent_request_status` `reply_agent_request` | The base mod provides the queue and MCP API; the in-game `/agent` command is provided by the optional `mc-agent-link-agent` addon |
 | Observation (pull) | `get_recent_events` `get_recent_logs` | Chat / join / leave / death, plus **command / container_open / entity_death / explosion / player_hurt / advancement / dimension_change**; high-frequency topics like `block_place` are opt-in |
-| Diagnosis | `tick_profile` `thread_dump` `list_mods` | Tick distribution, JVM thread dump, installed mods |
+| Diagnosis | `server_diagnose` `get_server_stats` `tick_profile` `tick_incidents` `thread_dump` `list_mods` | One bounded health snapshot with candidate signals, TPS/MSPT, slow-tick incident history, world/entity/chunk counts, logs, threads, crash summary, and mods |
 | Filesystem (sandboxed) | `list_dir` `read_server_file` `read_config` `write_config_file` | Read anywhere under server root; writes are limited to `config/**` with auto-backup |
 | Spark integration (optional) | `spark_status` `spark_stats` `spark_profiler_*` `spark_health_report` | When the [spark](https://spark.lucko.me) mod is installed, agents get flame graphs, GC details, and viewer URLs |
 | WorldEdit integration (optional) | `we_status` `we_set` `we_replace` `we_sphere` `we_cyl` `we_undo` | Faster on very large selections, and the only source of sphere/cylinder generation; separate undo stack from `undo_blocks` |
 | Stable addon API | `world.agentlink.api.AgentLinkApi` `BaseAddonTool` | Optional addon mods can register their own MCP tools, get an automatic `<modid>__` prefix, and appear in HTTP `tools/list` |
 
 Full tool catalog with per-tool arguments and return fields: [docs/tools.md](docs/tools.md). Wire-protocol fields, error codes, and sandbox boundaries: [docs/protocol.md](docs/protocol.md).
+
+The stable addon Java API is now split into reusable facades for requests/events/tasks, diagnostics, server-thread
+execution, NBT, items, players/inventory, effects, entities/spawning, blocks/undo, chunks, worlds,
+scoreboards, containers, progression, and server lifecycle. The entry point is
+`world.agentlink.api.AgentLinkApi`; see the [English API reference](docs/api.md). Commands from a
+third-party mod, or a vanilla capability not yet worth a typed facade, remain available through the
+explicit `run_console_command` escape hatch.
+
+### Server diagnosis
+
+Start with `server_diagnose` when investigating lag or an incident. It is a read-only snapshot with a total time budget: it does not start a profiler or upload data, and it reports timed-out components plus conservative `diagnosis.findings` rather than proof of root cause. The default budget is 12 seconds and `timeout_ms` can be set from 1 to 30 seconds. Use `read_server_file` on the returned crash path for the full report. If the JVM has already exited, use the external watchdog documented in [tools/README.en.md](tools/README.en.md) to preserve the exit scene; guest reads redact tokens, pair codes, and operator identities.
+
+### Request queue reliability
+
+The shared request queue is a 128-entry bounded ring. When it is full, new submissions are rejected instead of evicting pending or working requests; callers should report backpressure and retry later. Addon workers must use `claimOwned`, `replyOwned`, or `failOwned`, so a stale lease cannot deliver a late reply. Cancel and reload terminate the corresponding Claude process, while failed requests retain `FAILED` status and diagnostic text.
 
 ### Two boundaries worth stating up front
 
@@ -116,7 +144,7 @@ The repo also ships four Claude Code skills (under `.claude/skills/`, committed 
 |---|---|
 | `/mc-health-check` | Quick connectivity check after switching servers or hosts |
 | `/mc-overview` | One-round snapshot: health + players + events + errors + mods, ends with one suggested next step |
-| `/mc-diagnose` | Lag diagnosis loop: tick_profile → thread_dump → optional spark → mod attribution → config recommendation |
+| `/mc-diagnose` | Lag diagnosis loop: server_diagnose → timeout review → thread_dump/spark → mod attribution → config recommendation |
 | `/mc-crash` | Reads the newest `crash-reports/*.txt`, correlates with mods + recent error logs, proposes a fix |
 
 For agents without skill support, feed `.claude/skills/<name>/SKILL.md` directly as a prompt template.
@@ -125,9 +153,13 @@ For agents without skill support, feed `.claude/skills/<name>/SKILL.md` directly
 
 - **Stable entry point**: `world.agentlink.api.AgentLinkApi`
 - **Register tools**: `AgentLinkApi.registerTool(modId, tool)`
+- **Service modules**: `requests()`, `events()`, `tasks()`, `server()`, `buildZones()`, `roles()`
+- **High-level addon example**: `mc-agent-link-pixel` (server-local image-to-pixel-art builds with async slicing and undo)
 - **Convenience base class**: `world.agentlink.api.BaseAddonTool`
 - **Naming rule**: registered tools are automatically rewritten to `<modid>__<tool_name>` to avoid clashes with built-ins or other addons
 - **Discovery**: HTTP MCP `tools/list` returns addon tools together with built-in tools
+
+See [docs/api.md](docs/api.md) for Java API examples and [docs/api.zh-CN.md](docs/api.zh-CN.md) for Chinese documentation.
 
 This keeps the base mod focused on generic MCP transport, approval, and request-queue behavior while Claude bridge, avatar, or custom features live in optional addons.
 
@@ -141,7 +173,7 @@ This keeps the base mod focused on generic MCP transport, approval, and request-
 - **In-game tool approval** is enabled by default and split into 4 tiers.
   - `approval.auto_allow_tools`: allowed immediately without a prompt
   - `approval.trusted_tools`: remembered from the `[always allow this tool]` button
-  - ordinary approval: shown to all online OPs; clickable buttons and manual `/agentlink approve|deny|trust` use the same authorization checks
+  - ordinary approval: shown to all online OPs and assigned ADMINs; clickable buttons and manual `/agentlink approve|deny|trust` use the same authorization checks
   - `approval.admin_only_tools`: only players listed in `[roles].admin_uuids` may approve; when `admin_uuids` is empty, this falls back to all online OPs for legacy servers
 - **High-impact tools** such as `run_console_command`, `write_config_file`, `broadcast`, and `spark_profiler_*` can never be permanently trusted; they require per-call approval.
 - Default bind is `127.0.0.1`; `allow_remote = true` flips to `0.0.0.0` — firewall accordingly.

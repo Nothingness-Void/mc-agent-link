@@ -13,6 +13,25 @@ integrations are installed. That replaces discovering the boundaries by triggeri
 distinguishes "this token can never do that" from "no OP is online to approve it", which produce very
 different advice to the user.
 
+## Permission model
+
+There are two independent permission levels:
+
+1. **Backend / transport level** — a **CONSOLE** token minted by `/agentlink pair` is the
+   administrator's backend connection. It bypasses in-game approval and can use every tool.
+   Keep this token in the administrator's trusted Codex/Claude host only.
+2. **In-game level** — the addon `/agent` command and GUI accept only these player roles:
+   - **ADMIN** — UUID listed in `[roles].admin_uuids`. This role is assigned by the server
+     administrator and may be used even when the player is not OP. Admins can approve ordinary
+     and admin-only MCP prompts.
+   - **OP** — vanilla permission level 2 or higher, but not an assigned admin. OPs can use the
+     Agent command/GUI and approve ordinary prompts; admin-only tools still require an ADMIN.
+   - **PLAYER** — everyone else. Ordinary players cannot open or operate the Agent GUI, submit
+     `/agent` requests, steer, cancel, stop, or reset sessions.
+
+The server enforces this on the command tree, every GUI packet, and the request submitter. Client
+side hiding is only a convenience; it is not the security boundary.
+
 ## Approval tiers (config in `config/agent-link.toml`)
 
 Two independent dimensions decide whether a tool call goes through in-game approval:
@@ -27,10 +46,11 @@ Two independent dimensions decide whether a tool call goes through in-game appro
 |---|---|---|---|
 | 1 · auto-allow | always, no prompt | n/a | low-risk reads (see `approval.auto_allow_tools`) |
 | 2 · trusted (whole or `tool(arg=glob)`) | trusted hits skip the prompt | n/a | grown via in-game `[始终允许 …]` buttons |
-| 3 · normal approval | requires in-game button | any online OP | every tool not in 1/2/4 |
-| 4 · admin-only | requires button **and** OP must be in `[roles].admin_uuids` | only configured admins | mutating / sensitive tools (see `approval.admin_only_tools`) |
+| 3 · normal approval | requires in-game button | any online OP or assigned admin | every tool not in 1/2/4 |
+| 4 · admin-only | requires button | only assigned admins | mutating / sensitive tools (see `approval.admin_only_tools`) |
 
-A non-OP player cannot approve anything. The `/agentlink` command tree itself requires `hasPermission(2)`.
+A PLAYER cannot approve anything. The `/agentlink` command tree is available to the console, OPs,
+and assigned admins; sensitive subcommands still follow the same role checks.
 
 ### Build zones — the geometric exemption (0.5.0)
 
@@ -98,8 +118,10 @@ undeclared footprint is treated as unbounded.
 
 | Tool | Args | Returns |
 |---|---|---|
+| `server_diagnose` | optional component flags, bounded limits, `timeout_ms` | schema version, total budget, `complete`, component status (including `timeout`), server/tick/world snapshot, incident ledger, recent error logs, server threads, mods, newest crash-report summary, optional spark stats, and conservative `diagnosis.findings` |
 | `get_server_stats` | none | `{ tps, mspt, mem_used_mb, mem_max_mb, loaded_chunks, online, max_players }` |
 | `tick_profile` | none | rolling 100-tick distribution (avg/max/p50/p95/p99 mspt) |
+| `tick_incidents` | `limit?` (1..32, default 16) | timing-only history of ticks above 50 ms, with recent sample count over the last 10 seconds; continuous pressure is coalesced and causal attribution is intentionally left to spark |
 | `thread_dump` | none | server thread dump |
 | `get_recent_events` | `{ since_seq?, topics?, limit? }` | event-bus tail — see the topic list below |
 | `get_recent_logs` | `{ since_seq?, level?, limit? }` | server log tail |
@@ -173,7 +195,7 @@ The ring buffer grew from 1024 to 4096 entries to accommodate the wider topic se
 
 | Tool | Args | Returns |
 |---|---|---|
-| `read_config` | `{ name?, mode? }` | reads one of an allowlisted config name (`server.properties`, `agent-link.toml`, `whitelist.json`, `ops.json`, ...). `mode="list"` returns the allowed names. |
+| `read_config` | `{ name?, mode? }` | reads one of an allowlisted config name (`server.properties`, `agent-link.toml`, `whitelist.json`, `ops.json`, ...). `mode="list"` returns the allowed names. Guest results redact credentials and operator identities; console-tier reads preserve the original text. |
 | `save_block_snapshot` | `{ name, min, max, dim? }` (volume ≤ 65536) | saves palette+RLE to `config/agent-link/snapshots/<name>.json`. No restore yet. |
 | `get_scoreboard` | `{ mode? = "objectives" / "objective" / "teams", name? }` | objectives summary, full per-player scores for one objective, or team list with members. |
 
@@ -299,6 +321,21 @@ output. Each one here takes typed arguments, validates them, and returns a struc
 | `set_world_property` | 4 | `{ property: "time"/"weather"/"difficulty"/"gamerule", value, rule?, seconds?, add?, all_dimensions?, dim? }` | The write side of `get_world_info`, which could previously only report these. Gamerule names and value types are checked against the real registry, so a typo or a boolean in an integer rule is an error here rather than a silently ignored command. |
 | `force_load_chunks` | 4 | `{ mode? ("add"/"remove"/"list"/"clear"), min+max \| chunk+chunk_radius, dim? }` | Almost every world tool silently depends on the chunk being loaded; without this, reads return "not found" and writes can be discarded when the chunk generates later. Capped at 1024 chunks/call, and the response reminds the caller that forced chunks tick forever and persist across restarts. |
 | `save_world` | 4 | `{ flush? }` | Makes a checkpoint explicit after a large build, so a crash cannot falsify a "done" report. Deliberately narrow — it does not stop the server or toggle autosave. Warns when the save took long enough that players felt it. |
+| `manage_players` | 4 | `{ action, name? \| uuid?, player_name?, ip?, reason?, duration_seconds?, level?, bypass_player_limit? }` | Structured kick, player/IP ban and pardon, OP/deOP, whitelist add/remove/enable/disable/reload, and list inspection. Offline profiles must be online, cached, or identified by `uuid` plus `player_name`. |
+| `manage_player_inventory` | 4 | `{ action, name, slot?, item?, count?, first_slot?, second_slot? }` | Clear inventory or a slot, replace a slot with full item grammar, swap slots, select a hotbar slot, or intentionally drop a slot. This complements `give_item`; it does not silently drop overflow. |
+| `control_entity` | 4 | `{ action, name? \| uuid?, rider/vehicle refs?, amount?, x/y/z?, yaw/pitch?, slot?, item?, attribute?, base_value?, confirmed?, allow_player? }` | Mount/dismount, typed damage/heal, kill/discard, velocity, rotation, equipment, and base attributes. `kill`/`discard` require `confirmed:true`; player targets additionally require `allow_player:true`. |
+| `set_world_spawn` | 4 | `{ pos \| x+y+z, angle?, dim?, all_dimensions? }` | Set the shared spawn point for one dimension or all loaded dimensions. |
+| `set_world_border` | 4 | `{ action?, dim?, center?, x?, z?, size?, from?, to?, duration_ticks?, damage_per_block?, safe_zone?, warning_blocks?, warning_seconds? }` | Typed world-border read, center/size/lerp, damage/warning settings, and reset. |
+| `server_control` | 4 | `{ action, flush?, confirmed?, chunks?, enabled? }` | Save, reload selected resources, change view/simulation distance, toggle cheats for all players, or stop. `stop` requires `confirmed:true`; JVM restart belongs to an external supervisor. |
+| `manage_container` | 4 | `{ action, dim?, pos?, x/y/z?, slot?, item?, count?, first_slot?, second_slot? }` | Typed writes to chest/hopper/dispenser/barrel/shulker slots: replace, clear, clear all, or swap. `get_container` remains the read/audit view. |
+| `set_player_state` | 4 | `{ name, health?, absorption?, food?, saturation?, air?, experience_points?, experience_levels?, fire_seconds?, invulnerable?, mayfly?, flying? }` | Typed vitals, XP and ability flags with a before/after snapshot. |
+| `manage_player_progression` | 4 | `{ action, name?, recipe(s)?, advancement?, criterion?, contains?, limit? }` | List recipes; grant/revoke recipe ids; inspect or grant/revoke advancement criteria. `criterion:"*"` means all criteria. |
+| `manage_datapacks` | 4 | `{ action?, id?, ids? }` | List available/selected data packs, enable/disable selection, and reload selected resources. At least one pack must remain selected. |
+
+The new operator tools are deliberately grouped by domain rather than exposing one giant command
+proxy. They are all admin-only by default and are not whole-tool-trustable. `run_console_command`
+remains the escape hatch for mod-specific commands and vanilla features that cannot be represented
+without importing another mod's private API.
 
 † Exempt from the prompt when inside a `build_zones` region.
 
@@ -308,7 +345,7 @@ output. Each one here takes typed arguments, validates them, and returns a struc
 
 | Command | Effect |
 |---|---|
-| `/agent <text>` | OP: queue an in-game request to the connected agent (provided by `mc-agent-link-agent`) |
+| `/agent <text>` | ADMIN or OP: queue an in-game request to the connected agent (provided by `mc-agent-link-agent`) |
 | `/agent status` / `cancel <id>` / `reload` | inspect / cancel / reload addon config |
 | `/agentlink pair` | rotate the one-time MCP setup link as a **CONSOLE** token (skips in-game approval) |
 | `/agentlink pair-guest` | rotate the one-time MCP setup link as a **GUEST** token (always goes through in-game approval) |
@@ -323,7 +360,7 @@ output. Each one here takes typed arguments, validates them, and returns a struc
 | `/agentlink audit path` | print absolute path of `logs/agentlink-audit.log` (admin-only when `admin_uuids` is configured) |
 | `/agentlink audit tail [N]` | print the last N (default 20, max 200) audit lines (admin-only when `admin_uuids` is configured) |
 
-All `/agentlink` subcommands require `hasPermission(2)`. Admin-only approvals additionally require the actor's UUID to be in `[roles].admin_uuids`.
+`/agentlink` subcommands are available to the console, OPs, and assigned admins. Admin-only approvals additionally require the actor's UUID to be in `[roles].admin_uuids`.
 
 ## Audit log
 

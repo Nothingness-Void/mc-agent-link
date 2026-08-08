@@ -20,6 +20,7 @@ Optional addons can provide higher-level features:
 
 - `mc-agent-link-agent`: in-game `/agent` command, backed by the base mod request queue.
 - `mc-agent-link-claude`: Windows-focused Claude Code bridge that auto-handles `/agent` requests.
+- `mc-agent-link-pixel`: server-local image conversion and sliced, undoable Minecraft pixel-art builds.
 - `mc-agent-link-avatar`: in-game agent entity/avatar and world interactions.
 - `mc-agent-link-custom-commands`: user-defined command-to-prompt bindings.
 
@@ -64,7 +65,9 @@ Off-thread tools must not touch `ServerLevel`, entities, or block state directly
 access from an off-thread tool, hop back:
 
 ```java
-String blockId = ServerThread.call(server, () -> BlockWriter.idOf(level.getBlockState(pos)));
+String blockId = AgentLinkApi.server().call(server, () ->
+        AgentLinkApi.blocks().parse("minecraft:stone").state().getBlock()
+                .builtInRegistryHolder().key().location().toString());
 ```
 
 That is the same mechanism the base mod's sliced write tools use to spread a large edit across ticks.
@@ -89,34 +92,62 @@ spatial.
 
 ## Current base API surface
 
-The current in-JVM API for `/agent` request addons is:
+The stable in-JVM API is exposed through `world.agentlink.api.AgentLinkApi`. Addons should use the
+service facades instead of reaching into implementation packages:
 
 ```java
-AgentRequestBuffer buf = AgentRequestBuffer.get();
-List<AgentRequestBuffer.Entry> entries = buf.since(lastSeq, 10, false);
-AgentRequestBuffer.Entry working = buf.updateStatus(id, AgentRequestBuffer.Status.WORKING, "...");
-AgentRequestBuffer.Entry done = buf.reply(id, reply, true);
-AgentRequestBuffer.sendStatusToPlayer(mcServer, working);
-AgentRequestBuffer.sendReplyToPlayer(mcServer, done);
+AgentRequestApi requests = AgentLinkApi.requests();
+AgentEventApi events = AgentLinkApi.events();
+AgentTaskApi tasks = AgentLinkApi.tasks();
+AgentServerApi server = AgentLinkApi.server();
+AgentBuildZoneApi zones = AgentLinkApi.buildZones();
+AgentRoleApi roles = AgentLinkApi.roles();
+AgentNbtApi nbt = AgentLinkApi.nbt();
+AgentBlockApi blocks = AgentLinkApi.blocks();
+AgentItemApi items = AgentLinkApi.items();
+AgentPlayerApi players = AgentLinkApi.players();
+AgentInventoryApi inventory = AgentLinkApi.inventory();
+AgentEffectApi effects = AgentLinkApi.effects();
+AgentEntityApi entities = AgentLinkApi.entities();
+AgentEntitySpawnApi entitySpawn = AgentLinkApi.entitySpawn();
+AgentWorldApi worlds = AgentLinkApi.worlds();
+AgentChunkApi chunks = AgentLinkApi.chunks();
+AgentMessageApi messages = AgentLinkApi.messages();
 ```
 
-`AgentRequestBuffer.Entry` currently includes:
+Addon-owned long work can use the already-approved task submission path, while world writes can share
+one undo entry across slices:
 
-- `seq`
-- `id`
-- `createdAt`
-- `updatedAt`
-- `source`
-- `playerName`
-- `playerUuid`
-- `message`
-- `status`
-- `statusMessage`
-- `reply`
+```java
+AgentTaskApi.Submission queued = AgentLinkApi.tasks().submit(tool, args, session);
+AgentBlockApi.Batch batch = AgentLinkApi.blocks().beginBatch(level, "my addon edit", true);
+```
+
+Tools submitted this way should implement `world.agentlink.task.TaskContext.Sliceable` and hop onto the
+server thread for every world slice. The dispatcher preserves that marker when it prefixes addon
+tools, so `start_task` does not silently turn an addon edit into one blocking server-thread unit.
+
+The request facade replaces the old direct `AgentRequestBuffer` integration:
+
+```java
+List<AgentRequestApi.Request> entries = requests.since(lastSeq, 10, false);
+AgentRequestApi.Claim claim = requests.claimOwned(id, "myaddon", "processing");
+AgentRequestApi.Request working = claim == null ? null : claim.request();
+AgentRequestApi.Request done = claim == null ? null : requests.replyOwned(claim, reply, true);
+requests.sendStatusToPlayer(mcServer, working);
+requests.sendReplyToPlayer(mcServer, done);
+```
+
+`claimOwned` 返回的 lease 绑定消费者和 generation。完成或更新必须使用同一个 lease，避免
+旧 worker 在取消、重启或其他消费者接管后迟到回写；取消会使 lease 失效。
+
+The full examples and compatibility rules live in [docs/api.md](api.md). The Chinese reference is
+[docs/api.zh-CN.md](api.zh-CN.md).
 
 ## In-game `/agent` addon direction
 
-The `/agent` command should live in `mc-agent-link-agent`, not in the base mod. The addon depends on `agentlink` and calls `AgentRequestBuffer` directly:
+The `/agent` command should live in `mc-agent-link-agent`, not in the base mod. The addon depends on
+`agentlink` and consumes requests through `AgentLinkApi.requests()`:
 
 - `/agent <request>` creates a pending request.
 - `/agent status` reads recent requests and `lastAgentSeenAt`.
@@ -135,7 +166,7 @@ A Claude addon can be implemented as a separate Forge mod:
 - call local `claude.cmd` / `claude.exe` with `ProcessBuilder`
 - use `claude -p --resume <session_id> <message>`
 - use one shared session id for all OP requests
-- poll `AgentRequestBuffer` directly in JVM; do not use MCP HTTP for queue access
+- poll `AgentLinkApi.requests()` directly in JVM; do not use MCP HTTP for queue access
 - keep processing serial to avoid session conflicts
 
 The Claude addon should be explicit opt-in. Installing the base mod alone must not start any local LLM process.
@@ -151,19 +182,9 @@ Addons that can trigger server actions should:
 - Stop worker threads and child processes during server shutdown.
 - Surface clear failure messages back to the requesting player.
 
-## Future stable API work
+## Deliberate future API work
 
-If addons become common, promote the request queue into a small stable API package, for example:
+The typed server surface is intentionally broad now. The next compatibility-sensitive additions are:
 
-```text
-world.agentlink.api.AgentRequests
-world.agentlink.api.AgentRequest
-world.agentlink.api.AgentRequestStatus
-```
-
-Possible future additions:
-
-- Atomic `claim(id, workerName)` to prevent multiple addons from processing the same request.
-- Listener/event callback when a new request is queued.
-- Public capability/service lookup for addon mods.
-- Explicit semantic versioning for the Java addon API.
+- Listener callbacks when a request is queued or reaches a terminal state.
+- An explicit Java API version separate from the mod version.

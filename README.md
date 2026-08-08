@@ -8,6 +8,16 @@
 
 [English README](README.en.md) · [安装指南(给 agent 用)](INSTALL.md) · [协议规范](docs/protocol.md)
 
+## 权限模型
+
+项目分成两层权限：
+
+- **后台级**：管理员通过 `/agentlink pair` 生成的 console-tier 连接，拥有全部工具权限并跳过游戏内审批。这个令牌只应放在管理员自己的 Codex/Claude 主机中。
+- **游戏内级**：管理员在 `config/agent-link.toml` 的 `[roles].admin_uuids` 中分配 ADMIN；原生权限等级 `2+` 的玩家是 OP。ADMIN 和 OP 可以使用 `/agent` 与 GUI，普通玩家不能打开或操作 Agent。
+- ADMIN 可以审批普通工具和管理员工具；OP 只能审批普通工具；普通玩家不能审批或提交 Agent 请求。
+
+命令、GUI 网络包和服务端请求提交器都会重复执行服务端权限检查，客户端隐藏界面不是安全边界。
+
 ## 为什么有这个项目
 
 Claude Code、Cursor、自定义 agent 都说 MCP,但 Minecraft 服务器不说。RCON 又只能"问一句答一句",拿不到事件流、profile 数据、crash 上下文。
@@ -24,11 +34,14 @@ Claude Code、Cursor、自定义 agent 都说 MCP,但 Minecraft 服务器不说�
 | 世界读取 | `get_world_info` `get_block` `get_blocks_region` `find_blocks` `get_biome` `raycast` `list_entities_near` `list_dimensions` | 时间/天气/seed、单点方块、区域 RLE(≤4096)、**大范围找方块只返回命中点**、群系、自由射线、附近实体 |
 | 世界写入(原生,不需要 WorldEdit) | `set_block` `fill_blocks` `set_blocks` `undo_blocks` `save_block_snapshot` `list_snapshots` `restore_block_snapshot` | 单点/长方体/任意点集写入,支持 blockstate + 方块实体 NBT;独立撤销栈;快照存取闭环(带 offset 即 copy-paste) |
 | NBT | `get_nbt` `set_nbt` | 方块实体/实体/玩家/背包槽的原始 NBT 读写,支持 NBT path;附魔、村民交易、刷怪笼、模组内部数据全都能碰 |
-| 玩家/实体控制 | `teleport` `give_item` `set_gamemode` `apply_effect` `spawn_entity` `remove_entities` `modify_entity` | 传送(含跨维度/落到地表)、给物品(带 NBT)、切模式、状态效果、生成/清理/改实体 |
-| 世界控制 | `set_world_property` `force_load_chunks` `save_world` | 时间/天气/难度/gamerule 写入、区块强加载、手动落盘 |
+| 玩家/实体控制 | `teleport` `give_item` `set_gamemode` `apply_effect` `spawn_entity` `remove_entities` `modify_entity` `manage_players` `manage_player_inventory` `control_entity` | 传送(含跨维度/落到地表)、给物品(带 NBT)、切模式、状态效果、生成/清理/改实体、玩家管理、槽位级背包和实体关系/属性 |
+| 容器/玩家数据 | `manage_container` `set_player_state` `manage_player_progression` | 箱子等容器槽位、玩家生命/经验/能力、配方和进度 |
+| 世界/服务器控制 | `set_world_property` `set_world_spawn` `set_world_border` `force_load_chunks` `save_world` `server_control` | 时间/天气/难度/gamerule、出生点、世界边界、区块强加载、落盘、资源重载、视距和受控停服 |
+| 数据包 | `manage_datapacks` | 列出、启用/禁用和重载已选数据包 |
+| 计分板 | `get_scoreboard` `manage_scoreboard` | 目标、分数、展示槽、队伍和成员的结构化读写 |
 | 异步任务 | `start_task` `get_task` `cancel_task` `list_tasks` | 长任务从单次 RPC 解耦:立刻返回 task_id,分 tick 执行 + 进度上报 + 可取消 |
 | 注册表 | `list_block_ids` `list_item_ids` `list_entity_ids` `list_biome_ids` | 分页 + 子串过滤 |
-| 性能 | `get_server_stats` `tick_profile` `thread_dump` `list_mods` | TPS/MSPT、tick 分布、JVM 线程 dump、已装 mod 列表 |
+| 诊断 | `server_diagnose` `get_server_stats` `tick_profile` `tick_incidents` `thread_dump` `list_mods` | 一次汇总健康快照、候选根因、TPS/MSPT、慢 tick 事故历史、世界/实体/区块、日志、线程、崩溃摘要和 mod 列表 |
 | 游戏内请求 API | `agent_heartbeat` `get_agent_requests` `update_agent_request_status` `reply_agent_request` | 主 mod 提供请求队列和 MCP API;游戏内 `/agent` 命令由可选附属 mod `mc-agent-link-agent` 提供 |
 | 观察(pull) | `get_recent_events` `get_recent_logs` | 聊天/进出/死亡,外加 **command / container_open / entity_death / explosion / player_hurt / advancement / dimension_change**;`block_place` 等高频 topic 按需开启 |
 | 文件(沙盒) | `list_dir` `read_server_file` `read_config` `write_config_file` | 服务端 root 下任意文件**只读**;`config/**` 才能写,且自动备份 |
@@ -37,6 +50,19 @@ Claude Code、Cursor、自定义 agent 都说 MCP,但 Minecraft 服务器不说�
 | 稳定 addon API | `world.agentlink.api.AgentLinkApi` `BaseAddonTool` | 可选附属 mod 能注册自己的 MCP 工具,自动加上 `<modid>__` 前缀,并出现在 HTTP `tools/list` 里 |
 
 完整工具目录(含每个工具的入参/返回字段)见 [docs/tools.md](docs/tools.md)。协议字段、错误码、沙盒边界看 [docs/protocol.md](docs/protocol.md)。
+
+附属 mod 的稳定 Java API 已模块化覆盖请求/事件/任务、诊断、主线程桥接、NBT、物品、玩家/背包、
+状态效果、实体/生成、方块/撤销、区块、世界、计分板、容器、配方/进度和服务器生命周期。
+入口是 `world.agentlink.api.AgentLinkApi`，完整中文参考见 [docs/api.zh-CN.md](docs/api.zh-CN.md)；
+第三方 mod 未建模的命令仍可通过 `run_console_command` 兜底。
+
+### 服务器诊断
+
+遇到卡顿时优先调用 `server_diagnose`。它是有总时间预算的一次性只读快照，不会启动 profiler 或上传数据；返回原始证据、组件超时状态和保守的 `diagnosis.findings` 候选信号。默认预算 12 秒，可用 `timeout_ms` 调整到 1--30 秒。完整崩溃文本仍用返回路径调用 `read_server_file`。如果 JVM 已经退出，使用 [tools/README.md](tools/README.md) 中的外部 watchdog 保存退出现场；guest agent 读取配置和日志时会自动脱敏 token、pair code 和 OP 身份信息。
+
+### 请求队列的可靠性
+
+请求队列是 128 条容量的共享环形队列。队列满时不会覆盖正在处理或等待中的请求，新提交会得到明确的“队列已满”结果；消费方应稍后重试。addon worker 必须使用 `claimOwned`、`replyOwned` 或 `failOwned`，过期租约不能迟到回复。取消和重载会联动终止对应 Claude 进程，失败请求会保留 `FAILED` 状态和诊断回复。
 
 ### 两条边界值得单独说
 
@@ -113,7 +139,7 @@ https://github.com/Nothingness-Void/mc-agent-link/blob/main/AGENTS.md#agent-link
 |---|---|
 | `/mc-health-check` | 切服务器、换配置后跳一下连通性 |
 | `/mc-overview` | 一轮快照:健康度 + 玩家 + 事件 + 错误 + mods,末尾给一个建议 |
-| `/mc-diagnose` | 卡顿诊断闭环:tick_profile → thread_dump → 可选 spark → mod 定位 → 改 config |
+| `/mc-diagnose` | 卡顿诊断闭环:server_diagnose → 超时组件判断 → thread_dump/spark → mod 定位 → 改 config |
 | `/mc-crash` | 读最新 crash-reports/*.txt,关联 mods + 错误日志,给修复建议 |
 
  非 Claude Code 的 agent 也能直接读 `.claude/skills/<name>/SKILL.md` 当 prompt 模板。
@@ -122,9 +148,13 @@ https://github.com/Nothingness-Void/mc-agent-link/blob/main/AGENTS.md#agent-link
 
 - **稳定入口**:`world.agentlink.api.AgentLinkApi`
 - **注册工具**:`AgentLinkApi.registerTool(modId, tool)`
+- **模块服务**:`requests()`、`events()`、`tasks()`、`server()`、`buildZones()`、`roles()`
+- **高层附属示例**:`mc-agent-link-pixel`（服务端本地图片转像素画，异步、分片、可撤销）
 - **便捷基类**:`world.agentlink.api.BaseAddonTool`
 - **命名规则**:注册后会自动变成 `<modid>__<tool_name>`，避免和内置工具或别的 addon 冲突
 - **发现方式**:HTTP MCP `tools/list` 会把这些 addon 工具和内置工具一起返回
+
+详细的 Java API 示例见 [docs/api.zh-CN.md](docs/api.zh-CN.md)，英文版见 [docs/api.md](docs/api.md)。
 
 这让 base mod 保持通用 MCP / 审批 / 请求队列能力,Claude bridge、avatar、自定义工具都能放在可选 addon 里单独发版。
 
@@ -138,8 +168,8 @@ https://github.com/Nothingness-Void/mc-agent-link/blob/main/AGENTS.md#agent-link
 - **游戏内工具审批**:默认启用,分 4 档。
   - `approval.auto_allow_tools`：直接放行,不弹按钮
   - `approval.trusted_tools`：通过 `[始终允许该工具]` / `[始终允许 tool(arg=glob)]` 按钮维护,支持参数级 glob,如 `run_console_command(command=say *)`
-  - 普通审批：默认发给所有在线 OP;只要有权限 2 就能点按钮,手打 `/agentlink approve|deny|trust|trustpattern|trustlist|untrust` 也受同一套校验
-  - `approval.admin_only_tools`：admin_uuids 配置后只有这些玩家能点按钮;空 admin_uuids 时回退到所有在线 OP,保持老服可用
+  - 普通审批：默认发给所有在线 OP 和已分配的 ADMIN;OP 或 ADMIN 都能点按钮,手打 `/agentlink approve|deny|trust|trustpattern|trustlist|untrust` 也受同一套校验
+  - `approval.admin_only_tools`：配置 `admin_uuids` 后只有这些 ADMIN 能点按钮;空 `admin_uuids` 时回退到所有在线 OP,保持老服可用
 - **高风险工具**:`run_console_command`、`write_config_file`、`broadcast`、`spark_profiler_*` 不能被"始终允许整工具",但可以用参数级模式信任(例如只放行 `say *`)。
 - 默认绑定 `127.0.0.1`;`allow_remote = true` 才会监听 `0.0.0.0`,自己判断要不要加防火墙。
 

@@ -11,22 +11,21 @@ Goal: in **one round of parallel tool calls**, give the user a digestible snapsh
 
 These come from the `agent-link` MCP server. If they aren't available, tell the user the MCP server isn't connected and stop.
 
-- `get_server_stats`
+- `server_diagnose`
 - `list_online_players`
-- `tick_profile`
 - `get_recent_events` (last 30, no topic filter)
-- `get_recent_logs` with `levels: ["WARN", "ERROR"]`, `limit: 30`
-- `list_mods`
 
 ## Procedure
 
-1. **Call all six tools in parallel.** They are independent. One round.
+1. **Call `server_diagnose`, `list_online_players`, and `get_recent_events` in parallel.**
+   `server_diagnose` already contains bounded tick, world/entity/chunk, error-log, thread, mod,
+   and crash-summary data; do not repeat those calls unless the snapshot reports an error.
 2. Compose a short report (under ~150 words) with sections:
-   - **Health**: TPS, avg/p95/p99 mspt, mem used / max, loaded chunks. Flag anything that looks off (TPS < 19.5, p99 > 50 ms, mem > 90% of max).
+   - **Health**: TPS, avg/p95/p99 mspt, mem used / max, loaded chunks, and `diagnosis.status`. Flag anything that looks off (TPS < 19.5, p99 > 50 ms, mem > 90% of max).
    - **Players**: count + names. If 0, say "no one online".
    - **Recent activity**: 1-2 sentences summarizing chat / joins / leaves / deaths from `get_recent_events`. Mention `head_seq` so the user can ask for incremental updates later.
-   - **Recent issues**: if WARN/ERROR logs exist, summarize the top 1-2 patterns (don't dump raw lines). If clean, say "no warnings or errors in buffer".
-   - **Mods**: count + loader. Don't list them all — only call out ones that look unusual or relevant if there's a recent error.
+   - **Recent issues**: summarize the top 1-2 `diagnosis.findings` or WARN/ERROR patterns (don't dump raw lines). If clean, say "no warnings or errors in buffer".
+   - **Mods**: count + loader from the snapshot. Don't list them all — only call out ones that look unusual or relevant if there's a recent error.
 3. End with **one** suggested next step appropriate to what you found:
    - p99 high or errors present → "want me to run `/mc-diagnose`?"
    - crash reports recently created → "want me to run `/mc-crash`?"
