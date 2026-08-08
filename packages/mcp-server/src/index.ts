@@ -108,6 +108,30 @@ const TOOLS: ToolDef[] = [
   },
   {
     spec: {
+      name: "server_diagnose",
+      description:
+        "Bounded one-shot server health snapshot with a total timeout budget, tick data, world/entity/chunk counts, recent error logs, server threads, mods, crash summary, optional spark stats, and conservative candidate findings.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          include_logs: { type: "boolean", description: "Include recent WARN/ERROR/FATAL logs. Default true." },
+          include_crash_report: { type: "boolean", description: "Include the newest crash-report summary. Default true." },
+          include_crash_content: { type: "boolean", description: "Include a bounded crash-report prefix. Default false." },
+          include_thread_dump: { type: "boolean", description: "Include server-related JVM threads. Default true." },
+          include_mods: { type: "boolean", description: "Include installed mods. Default true." },
+          include_spark: { type: "boolean", description: "Include non-invasive spark stats when available. Default true." },
+          log_limit: { type: "number", description: "Warning/error lines, clamped by the server." },
+          max_frames: { type: "number", description: "Stack frames per server thread, clamped by the server." },
+          max_crash_bytes: { type: "number", description: "Crash prefix byte limit, clamped by the server." },
+          timeout_ms: { type: "number", description: "Total diagnostic budget in milliseconds, clamped to 1000..30000. Default 12000." },
+        },
+        additionalProperties: false,
+      },
+    },
+    toAgentLink: (a) => ({ tool: "server_diagnose", args: { ...a } }),
+  },
+  {
+    spec: {
       name: "agent_heartbeat",
       description: "Record that an MCP agent is online/active. Useful for in-game /agent status.",
       inputSchema: {
@@ -381,6 +405,31 @@ const TOOLS: ToolDef[] = [
   },
   {
     spec: {
+      name: "tick_incidents",
+      description:
+        "Bounded timing history of recent slow server ticks. Records ticks above 50 ms, " +
+        "coalesces continuous pressure to at most one incident per second, reports recent samples " +
+        "from a 10-second window, and does not claim " +
+        "causal attribution; use spark for the causal profile.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          limit: {
+            type: "integer",
+            description: "Number of recent incident records, clamped to 1..32. Default 16.",
+          },
+        },
+        additionalProperties: false,
+      },
+    },
+    toAgentLink: (a) => {
+      const args: Record<string, unknown> = {};
+      if (typeof a.limit === "number") args.limit = a.limit;
+      return { tool: "tick_incidents", args };
+    },
+  },
+  {
+    spec: {
       name: "thread_dump",
       description:
         "JVM thread dump (name, state, top stack frames per thread). " +
@@ -537,8 +586,9 @@ server is real — actions like \`broadcast\`, \`run_console_command\`, and
 - **In-game OP request API**: optional addon mods can submit in-game operator
   requests to the base mod queue. Poll \`get_agent_requests\`, acknowledge with
   \`update_agent_request_status\`, then answer with \`reply_agent_request\`.
-- **Diagnosis**: \`tick_profile\` (avg/p50/p95/p99/max mspt),
-  \`thread_dump\` (JVM threads), \`list_mods\`.
+- **Diagnosis**: \`server_diagnose\` (one bounded snapshot with findings,
+  logs, crash report, threads, mods, and optional spark data), plus the focused
+  \`tick_profile\`, \`tick_incidents\`, \`thread_dump\`, and \`list_mods\` tools.
 - **Spark integration** (only if the spark mod is installed — call
   \`spark_status\` first): \`spark_stats\` for richer multi-window stats,
   \`spark_profiler_start\`/\`spark_profiler_stop\`/\`spark_profiler_cancel\`
@@ -552,18 +602,20 @@ server is real — actions like \`broadcast\`, \`run_console_command\`, and
 
 # Diagnosing lag — recommended loop
 
-1. \`tick_profile\` — is the avg fine but p99 bad? That's a spike, not steady load.
-2. \`thread_dump\` (try \`only_server: true\` first) — what was \`Server thread\`
+1. \`server_diagnose\` — start with one bounded snapshot and read
+   \`diagnosis.findings\` before collecting more data.
+2. \`tick_profile\` — is the avg fine but p99 bad? That's a spike, not steady load.
+3. \`thread_dump\` (try \`only_server: true\` first) — what was \`Server thread\`
    doing when sampled?
-3. \`spark_status\` — is spark installed? If yes:
+4. \`spark_status\` — is spark installed? If yes:
    - \`spark_profiler_start\` (set \`timeout: 30\` for hands-off auto-stop, or
      leave it open and call \`spark_profiler_stop\` after the user lets it run),
    - then read the viewer URL from the stop response.
    Without spark, rely on \`tick_profile\` + \`thread_dump\` and tell the user
    spark would give better data.
-4. \`list_mods\` to map a hot package or stack frame back to a mod id.
-5. \`read_server_file\` on \`config/<that-mod>.toml\` to see its settings.
-6. \`write_config_file\` to tune the value (auto-backed-up). Then ask the
+5. \`list_mods\` to map a hot package or stack frame back to a mod id.
+6. \`read_server_file\` on \`config/<that-mod>.toml\` to see its settings.
+7. \`write_config_file\` to tune the value (auto-backed-up). Then ask the
    operator to \`/reload\` or restart — DO NOT restart on your own.
 
 # Investigating a crash
