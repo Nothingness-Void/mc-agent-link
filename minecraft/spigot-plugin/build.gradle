@@ -1,0 +1,122 @@
+plugins {
+    id 'java'
+    id 'maven-publish'
+    id 'com.github.johnrengelman.shadow' version '8.1.1'
+}
+
+group = plugin_group
+def targetMinecraftVersion = (project.findProperty('minecraft_version') ?: '1.20.1').toString()
+def apiVersion = (project.findProperty('api_version') ?: '1.20').toString()
+def spigotApiVersion = (project.findProperty('spigot_api_version') ?: '1.20.1-R0.1-SNAPSHOT').toString()
+def pluginVersion = (project.findProperty('plugin_version') ?: '0.5.0-alpha').toString()
+def pluginName = (project.findProperty('plugin_name') ?: 'AgentLink').toString()
+def pluginDescription = (project.findProperty('plugin_description')
+        ?: 'Lets AI agents connect to a modern Spigot server through MCP.').toString()
+def artifactName = (project.findProperty('artifact_name') ?: 'agent-link-spigot-modern').toString()
+def javaRelease = Integer.parseInt((project.findProperty('java_release') ?: '17').toString())
+
+version = pluginVersion
+
+def apiParts = apiVersion.tokenize('.').collect { Integer.parseInt(it) }
+if (apiParts.size() < 2 || apiParts[0] != 1 || apiParts[1] < 20) {
+    throw new GradleException("Modern Spigot builds require api_version >= 1.20, got ${apiVersion}")
+}
+if (javaRelease < 17) {
+    throw new GradleException("Modern Spigot builds require Java release >= 17, got ${javaRelease}")
+}
+
+base {
+    archivesName = artifactName
+}
+
+java {
+    toolchain.languageVersion = JavaLanguageVersion.of(javaRelease)
+    withSourcesJar()
+}
+
+repositories {
+    mavenCentral()
+    maven {
+        name = 'spigot'
+        url = uri('https://hub.spigotmc.org/nexus/content/repositories/snapshots/')
+    }
+}
+
+configurations {
+    shade
+    implementation.extendsFrom(shade)
+}
+
+dependencies {
+    compileOnly "org.spigotmc:spigot-api:${spigotApiVersion}"
+    shade('com.google.code.gson:gson:2.10.1') {
+        transitive = false
+    }
+    shade('org.java-websocket:Java-WebSocket:1.5.7') {
+        transitive = false
+    }
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+}
+
+processResources {
+    filesMatching('plugin.yml') {
+        expand(
+                version: project.version,
+                minecraftVersion: targetMinecraftVersion,
+                apiVersion: apiVersion,
+                pluginName: pluginName,
+                pluginDescription: pluginDescription
+        )
+    }
+}
+
+tasks.named('shadowJar') {
+    archiveClassifier = ''
+    configurations = [project.configurations.shade]
+    relocate 'com.google.gson', 'world.agentlink.shadow.gson'
+    relocate 'org.java_websocket', 'world.agentlink.shadow.java_websocket'
+    manifest {
+        attributes(
+                'Agent-Link-Target-Minecraft': targetMinecraftVersion,
+                'Agent-Link-Supported-Minecraft': '1.20+',
+                'Agent-Link-Api': apiVersion,
+                'Agent-Link-Java-Release': javaRelease.toString()
+        )
+    }
+}
+
+tasks.named('jar') {
+    enabled = false
+}
+
+tasks.named('assemble') {
+    dependsOn tasks.named('shadowJar')
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.release = javaRelease
+}
+
+tasks.register('verifyModernTarget') {
+    doLast {
+        logger.lifecycle("AgentLink modern target: Minecraft ${targetMinecraftVersion}, Bukkit API ${spigotApiVersion}, api-version ${apiVersion}, Java ${javaRelease}")
+        logger.lifecycle('Runtime support policy: Spigot/Paper 1.20+ without NMS or loader-specific APIs')
+    }
+}
+
+tasks.named('check') {
+    dependsOn tasks.named('verifyModernTarget')
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
+}
+
+publishing {
+    publications {
+        mavenJava(MavenPublication) {
+            from components.java
+        }
+    }
+}

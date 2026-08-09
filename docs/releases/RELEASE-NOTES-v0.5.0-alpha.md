@@ -13,6 +13,26 @@ building doesn't mean clicking "allow" three hundred times.
 
 ---
 
+## Pairing and loader coverage
+
+- Pairing now uses a local one-use HTTP setup endpoint. A fresh server prints a
+  `/pair/setup/<random-id>` URL valid for 10 minutes; the agent can complete pairing without
+  opening GitHub or asking the operator for a raw token.
+- Issued bearer tokens persist across server restarts. After a successful pairing the server
+  suppresses automatic setup-endpoint refresh. An operator must explicitly run
+  `/agentlink pair` or `/agentlink pair-guest` when adding another agent or recovering a lost host
+  configuration.
+- Forge 1.20.1 and NeoForge 1.21.1 now share the same persistent pairing behavior. The modern
+  Spigot/Paper 1.20+ plugin provides the base MCP link and operator commands without installing
+  `mc-agent-link-agent` or registering the in-game `/agent` command.
+- Agent-facing documentation is now bilingual and documents local pairing, remote
+  `mcp_public_host`/`public-host` configuration, recovery responses, and the expected `405` result
+  for a GET request to the MCP JSON-RPC endpoint.
+- Setup endpoints, pair codes, bearer tokens, and operator identities are redacted from guest-facing
+  in-memory logs.
+
+---
+
 ## Async tasks — `start_task` / `get_task` / `cancel_task` / `list_tasks`
 
 MCP is request/response, and every layer in between has a timeout: the MCP host, the HTTP client, an

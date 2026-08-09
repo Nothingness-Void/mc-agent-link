@@ -28,6 +28,7 @@ public final class AgentLinkConfig {
             List<String> writeDeny,
             boolean mcpEnabled,
             int mcpListenPort,
+            String mcpPublicHost,
             List<String> mcpAllowedOrigins,
             boolean approvalEnabled,
             int approvalTimeoutSeconds,
@@ -46,7 +47,7 @@ public final class AgentLinkConfig {
             String version
     ) {}
 
-    /** Single source of truth for the version string reported over MCP and in the setup link. */
+    /** Single source of truth for the version string reported over MCP and in the setup endpoint. */
     public static final String VERSION = "0.5.0-alpha";
 
     /**
@@ -185,6 +186,7 @@ public final class AgentLinkConfig {
 
             boolean mcpEnabled = cfg.getOrElse("mcp_enabled", true);
             int mcpPort = cfg.getIntOrElse("mcp_listen_port", 25581);
+            String mcpPublicHost = normalizeHost(cfg.getOrElse("mcp_public_host", "127.0.0.1"));
             List<String> mcpAllowedOrigins = readStringList(cfg, "mcp_allowed_origins", DEFAULT_MCP_ALLOWED_ORIGINS);
             boolean approvalEnabled = cfg.getOrElse("approval.enabled", true);
             int approvalTimeoutSeconds = Math.max(5, cfg.getIntOrElse("approval.timeout_seconds", 60));
@@ -267,6 +269,11 @@ public final class AgentLinkConfig {
             cfg.setComment("mcp_listen_port",
                     "\n Port for the MCP HTTP endpoint (POST /mcp). Default 25581.\n" +
                     " Binds the same host as listen_port (127.0.0.1 unless allow_remote is true).");
+            cfg.set("mcp_public_host", mcpPublicHost);
+            cfg.setComment("mcp_public_host",
+                    "\n Hostname or IP embedded in the local setup endpoint and returned MCP URL.\n" +
+                    " Keep 127.0.0.1 when the agent runs on this server; set the reachable server address\n" +
+                    " for a remote agent. Do not include http:// or a trailing slash.");
             cfg.set("mcp_allowed_origins", mcpAllowedOrigins);
             cfg.setComment("mcp_allowed_origins",
                     "\n Origin header allowlist for MCP HTTP. Browsers send Origin; native MCP hosts usually do not (or send \"null\").\n" +
@@ -356,7 +363,7 @@ public final class AgentLinkConfig {
 
             cfg.save();
             CURRENT = new Snapshot(port, allowRemote, token, writeAllow, writeDeny,
-                    mcpEnabled, mcpPort, mcpAllowedOrigins,
+                    mcpEnabled, mcpPort, mcpPublicHost, mcpAllowedOrigins,
                     approvalEnabled, approvalTimeoutSeconds, approvalAutoAllowTools, approvalTrustedTools,
                     java.util.Collections.unmodifiableList(approvalAdminOnlyTools),
                     java.util.Collections.unmodifiableList(roleAdminUuids),
@@ -509,13 +516,22 @@ public final class AgentLinkConfig {
     private static Snapshot withTrusted(Snapshot snap, List<String> trusted) {
         return new Snapshot(snap.listenPort(), snap.allowRemote(), snap.token(),
                 snap.writeAllow(), snap.writeDeny(), snap.mcpEnabled(),
-                snap.mcpListenPort(), snap.mcpAllowedOrigins(), snap.approvalEnabled(),
+                snap.mcpListenPort(), snap.mcpPublicHost(), snap.mcpAllowedOrigins(), snap.approvalEnabled(),
                 snap.approvalTimeoutSeconds(), snap.approvalAutoAllowTools(), trusted,
                 snap.approvalAdminOnlyTools(),
                 snap.roleAdminUuids(), snap.roleGuestUuids(),
                 snap.auditEnabled(), snap.auditRedactArgs(), snap.auditMaxArgChars(),
                 snap.buildZones(), snap.taskMaxConcurrent(), snap.taskBlocksPerTick(),
                 snap.eventVerboseTopics(), snap.version());
+    }
+
+    private static String normalizeHost(String value) {
+        if (value == null || value.isBlank()) return "127.0.0.1";
+        String host = value.trim();
+        if (host.startsWith("http://")) host = host.substring("http://".length());
+        if (host.startsWith("https://")) host = host.substring("https://".length());
+        while (host.endsWith("/")) host = host.substring(0, host.length() - 1);
+        return host.isBlank() ? "127.0.0.1" : host;
     }
 
     public static synchronized boolean removeApprovalTrustedTool(String ruleString) {

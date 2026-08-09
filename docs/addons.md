@@ -6,7 +6,7 @@
 
 The base Forge mod should stay focused on:
 
-- MCP HTTP transport and setup-link pairing.
+- MCP HTTP transport and local setup-endpoint pairing.
 - Core server tools and safety boundaries.
 - In-game `/agent` request queue.
 - Stable Java APIs that addon mods can call in the same JVM.

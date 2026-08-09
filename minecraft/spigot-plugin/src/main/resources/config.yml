@@ -1,0 +1,39 @@
+# Agent Link Spigot configuration.
+# Keep allow-remote false unless the MCP port is protected by a firewall or private network.
+listen-port: 25580
+token: ""
+
+mcp:
+  enabled: true
+  port: 25581
+  allow-remote: false
+  # Host embedded in setup endpoints and returned MCP URLs. Set this to the server hostname/IP for remote agents.
+  public-host: 127.0.0.1
+  # Requests without an Origin header use the literal origin "null".
+  allowed-origins:
+    - "null"
+    - "http://127.0.0.1"
+
+approval:
+  enabled: true
+  timeout-seconds: 30
+  # Read-only probes that never need an in-game prompt.
+  auto-allow-tools:
+    - ping
+    - whoami
+  # Guest-token tools can be remembered by exact tool name or tool name + JSON args.
+  trusted-tools: []
+  # These tools can only be approved by the console or players with agentlink.admin.
+  admin-only-tools:
+    - run_console_command
+    - write_config_file
+    - server_control
+
+# Guest tokens are prompted to an online OP/admin for mutating tools.
+# Console-tier tokens minted by /agentlink pair skip this prompt.
+
+# File writes are constrained to server-root-relative paths.
+write-allow:
+  - "config/**"
+write-deny:
+  - "config/agent-link/issued_tokens.json"

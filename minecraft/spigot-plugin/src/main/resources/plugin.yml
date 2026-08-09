@@ -1,0 +1,20 @@
+name: ${pluginName}
+version: ${version}
+main: world.agentlink.spigot.AgentLinkSpigotPlugin
+api-version: '${apiVersion}'
+description: ${pluginDescription}
+author: Nothingness-Void
+website: https://github.com/Nothingness-Void/mc-agent-link
+load: STARTUP
+commands:
+  agentlink:
+    description: Manage the Agent Link connection and pairing
+    usage: /agentlink <pair|pair-guest|status|tokens|revoke|reload|approvals|approve|deny>
+    permission: agentlink.admin
+permissions:
+  agentlink.admin:
+    description: Manage Agent Link pairing, tokens, and server connection
+    default: op
+  agentlink.approve:
+    description: Approve or deny guest Agent Link tool calls
+    default: op

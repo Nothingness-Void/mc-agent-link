@@ -215,7 +215,68 @@ In addition to the WebSocket protocol above, the mod exposes the same tool surfa
 
 **MCP endpoint**: `POST http://<host>:<mcp_listen_port>/mcp` (default port `25581`).
 
-**Setup link**: on startup the mod logs a one-use setup link valid for 10 minutes. If pairing has not succeeded when it expires, the mod refreshes the pair code and logs a new setup link:
+**Local setup endpoint**: on a server with no persisted issued token, the mod/plugin logs a
+one-use local HTTP setup endpoint valid for 10 minutes:
+
+    agent-link local setup endpoint (one use, expires at 2026-08-09T07:38:17Z): http://127.0.0.1:25581/pair/setup/<random-id>
+
+The random path is the setup credential. Treat the complete URL as a secret and do not put it in
+an MCP host config. The server refreshes the endpoint after expiry only while pairing is still
+needed. After a successful pair, the bearer token is persisted and automatic refresh stops,
+including across server restarts.
+
+GET the complete setup URL with an Accept: application/json header. The response is a JSON
+descriptor with kind=agent-link-pairing and version=2. It contains mcp_url, pair_url, setup_url,
+pair_code, expires_at, expires_at_iso, allow_remote, token_tier, and a pair_request object:
+
+    {
+      "kind": "agent-link-pairing",
+      "version": 2,
+      "mcp_url": "http://127.0.0.1:25581/mcp",
+      "pair_url": "http://127.0.0.1:25581/pair",
+      "setup_url": "http://127.0.0.1:25581/pair/setup/<random-id>",
+      "pair_code": "1234-5678",
+      "expires_at": 1779640000000,
+      "expires_at_iso": "2026-05-25T00:00:00Z",
+      "allow_remote": false,
+      "token_tier": "console",
+      "pair_request": {
+        "method": "POST",
+        "url": "http://127.0.0.1:25581/pair",
+        "body": {"pair_code": "1234-5678"}
+      }
+    }
+
+POST pair_request.body to pair_url, or send this equivalent request:
+
+    POST <pair_url>
+    Accept: application/json
+    Content-Type: application/json
+    Origin: http://127.0.0.1
+
+    {"pair_code":"1234-5678"}
+
+Success returns the MCP host config block:
+
+    {
+      "mcp": {
+        "type": "http",
+        "url": "http://127.0.0.1:25581/mcp",
+        "headers": {
+          "Authorization": "Bearer <token>"
+        }
+      }
+    }
+
+The pair code and setup path are consumed after one successful exchange. Failure returns HTTP
+401 with a JSON reason. The reason is one of unknown, expired, or used.
+
+If the startup log says pairing already exists; setup endpoint suppressed, reuse the existing
+host config. A new agent cannot recover the plaintext token from /mcp; the operator must
+explicitly run /agentlink pair or /agentlink pair-guest and provide the newly printed endpoint.
+
+**Legacy GitHub setup link**: older versions may print this fragment form. It remains compatible,
+but opening GitHub is not part of the current pairing protocol:
 
 ```text
 https://github.com/Nothingness-Void/mc-agent-link/blob/main/AGENTS.md#agent-link-setup=<base64url-json>
@@ -295,8 +356,10 @@ Tool execution failures are returned as MCP tool errors (`isError: true`) rather
 | HTTP status | meaning |
 |---|---|
 | `401` | missing/invalid `Authorization` header on `/mcp`, or invalid/expired/used pair code on `/pair` |
+| `404` | setup endpoint path is unknown |
+| `410` | setup endpoint is expired, already used, or pairing is inactive |
 | `403` | `Origin` header not in `mcp_allowed_origins` |
-| `405` | non-`POST` method (or `GET` since we don't stream) |
+| `405` | wrong method: `/mcp` and `/pair` require POST; a setup endpoint requires GET; `/mcp` GET is not an MCP health check |
 | `406` | `Accept` header doesn't include `application/json` |
 | `413` | request body exceeds 128 KiB |
 | `400` | malformed JSON-RPC request (mapped to JSON-RPC `-32700` / `-32600`) |

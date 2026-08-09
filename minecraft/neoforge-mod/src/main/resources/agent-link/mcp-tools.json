@@ -1,0 +1,1266 @@
+[
+  {
+    "name": "ping",
+    "description": "Liveness probe. Returns the server's uptime in ms.",
+    "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+  },
+  {
+    "name": "run_console_command",
+    "description": "Execute a server console command (op level 4). Returns the captured output. Leading slash is optional.",
+    "inputSchema": {
+      "type": "object",
+      "properties": { "command": { "type": "string", "description": "e.g. \"list\" or \"/say hi\"" } },
+      "required": ["command"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "list_online_players",
+    "description": "List currently online players with name, UUID, ping, and dimension.",
+    "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+  },
+  {
+    "name": "get_player_info",
+    "description": "Detailed info for one online player: precise + block-aligned position, dimension, yaw/pitch, facing cardinal, look_vector, look_target (5-block raycast), held items, status effects, vitals, xp, gamemode, ping.",
+    "inputSchema": {
+      "type": "object",
+      "properties": { "name": { "type": "string" } },
+      "required": ["name"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "get_player_inventory",
+    "description": "Snapshot of one online player's inventory: hotbar+main, armor (slots 36-39), offhand (40). Returns id, count, damage, optional custom_name and has_nbt flag per non-empty slot.",
+    "inputSchema": {
+      "type": "object",
+      "properties": { "name": { "type": "string" } },
+      "required": ["name"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "get_world_info",
+    "description": "Snapshot of time/weather/world settings: game time, day, moon phase, rain/thunder, difficulty, hardcore, default gametype, level name, seed, overworld spawn, world border, gamerules, and per-dimension summary.",
+    "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+  },
+  {
+    "name": "get_block",
+    "description": "Read a single block at (x,y,z). Returns id, blockstate properties, light emission, biome at column, and block-entity type if present.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "x": { "type": "integer" },
+        "y": { "type": "integer" },
+        "z": { "type": "integer" },
+        "dim": { "type": "string", "description": "Dimension id, default minecraft:overworld" }
+      },
+      "required": ["x", "y", "z"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "get_blocks_region",
+    "description": "Read a cuboid (volume <= 4096 blocks). Returns palette + run-length runs in y-z-x order. Bigger regions must be split into chunks.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "min": { "type": "object", "properties": { "x": {"type": "integer"}, "y": {"type": "integer"}, "z": {"type": "integer"} }, "required": ["x","y","z"] },
+        "max": { "type": "object", "properties": { "x": {"type": "integer"}, "y": {"type": "integer"}, "z": {"type": "integer"} }, "required": ["x","y","z"] },
+        "dim": { "type": "string" }
+      },
+      "required": ["min", "max"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "get_biome",
+    "description": "Biome at (x,y,z) plus base/local temperature, downfall, has_precipitation.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "x": { "type": "integer" }, "y": { "type": "integer" }, "z": { "type": "integer" },
+        "dim": { "type": "string" }
+      },
+      "required": ["x", "y", "z"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "raycast",
+    "description": "Generic block raycast. Caller picks origin and direction; returns hit block, face, distance, and hit-point (or hit=false). max_distance capped at 64.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "origin": { "type": "object", "properties": { "x":{"type":"number"}, "y":{"type":"number"}, "z":{"type":"number"} }, "required":["x","y","z"] },
+        "direction": { "type": "object", "properties": { "x":{"type":"number"}, "y":{"type":"number"}, "z":{"type":"number"} }, "required":["x","y","z"] },
+        "max_distance": { "type": "number" },
+        "hit_fluids": { "type": "boolean" },
+        "dim": { "type": "string" }
+      },
+      "required": ["origin", "direction"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "list_entities_near",
+    "description": "List entities within radius (<=64) of a center point. Returns up to 256 hits with uuid, type, category (player/mob/item/projectile/xp_orb/other), position, distance, vitals, vehicle relations. Optional filters: types[], ids[].",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "center": { "type": "object", "properties": { "x":{"type":"number"}, "y":{"type":"number"}, "z":{"type":"number"} }, "required":["x","y","z"] },
+        "radius": { "type": "number" },
+        "limit": { "type": "integer" },
+        "types": { "type": "array", "items": { "type": "string" } },
+        "ids": { "type": "array", "items": { "type": "string" } },
+        "dim": { "type": "string" }
+      },
+      "required": ["center"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "list_dimensions",
+    "description": "List loaded dimensions: id, min_y, height, sea_level, loaded_chunks.",
+    "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+  },
+  {
+    "name": "list_block_ids",
+    "description": "Paginated registry list. Optional filter is a substring of the resource id (e.g. \"wool\"). Default page_size 100, max 500.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "filter": { "type": "string" },
+        "page": { "type": "integer" },
+        "page_size": { "type": "integer" }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "list_item_ids",
+    "description": "Paginated registry list of items. Same args as list_block_ids.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "filter": { "type": "string" },
+        "page": { "type": "integer" },
+        "page_size": { "type": "integer" }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "list_entity_ids",
+    "description": "Paginated registry list of entity types.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "filter": { "type": "string" },
+        "page": { "type": "integer" },
+        "page_size": { "type": "integer" }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "list_biome_ids",
+    "description": "List vanilla biome ids (datapack-added biomes are not included).",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "filter": { "type": "string" },
+        "page": { "type": "integer" },
+        "page_size": { "type": "integer" }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "broadcast",
+    "description": "Send a system message to all online players or one specific player. Provide either `message` (plain text + optional `color`) or `components` (raw tellraw JSON, object or array). `target` accepts \"@a\", a player name, or a UUID; defaults to @a.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "message": { "type": "string" },
+        "components": { "description": "tellraw component(s) — object or array" },
+        "color": { "type": "string", "description": "Optional Minecraft chat color: red, yellow, gold, green, aqua, ..." },
+        "target": { "type": "string", "description": "@a, player name, or UUID" }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "command",
+    "description": "Brigadier-backed dry-run for the server command tree. mode=\"suggest\" returns Tab-style suggestions at `cursor`; mode=\"parse\" reports syntax errors and unused trailing input. Source runs at op level 4 — nothing is executed.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "mode": { "type": "string", "enum": ["suggest", "parse"] },
+        "command": { "type": "string" },
+        "cursor": { "type": "integer" }
+      },
+      "required": ["command"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "find_players",
+    "description": "Resolve a vanilla entity selector (@a / @e / @p / @r / etc.). Optional `anchor`:{x,y,z,dim?} or `anchor_player`:name positions the source for relative selectors like distance=..16.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "selector": { "type": "string" },
+        "include_entities": { "type": "boolean" },
+        "anchor": { "type": "object", "properties": { "x": {"type":"number"}, "y": {"type":"number"}, "z": {"type":"number"}, "dim": {"type":"string"} } },
+        "anchor_player": { "type": "string" }
+      },
+      "required": ["selector"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "get_item_info",
+    "description": "Static catalog info for one item or block id: stack size, durability, fuel time, edibility, fire resistance, tags, default block state.",
+    "inputSchema": {
+      "type": "object",
+      "properties": { "id": { "type": "string" } },
+      "required": ["id"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "get_recipes_for",
+    "description": "Recipes whose result is the given item id. Covers crafting (shaped/shapeless), smelting/blasting/smoking/campfire, stonecutting, smithing.",
+    "inputSchema": {
+      "type": "object",
+      "properties": { "id": { "type": "string" } },
+      "required": ["id"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "get_block_drops",
+    "description": "Compute loot-table drops for a block under a given tool / fortune / silk_touch. One randomized roll by default; set `rolls` (1-1000) to average over multiple rolls.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "x": { "type": "integer" }, "y": { "type": "integer" }, "z": { "type": "integer" },
+        "dim": { "type": "string" },
+        "tool": { "type": "string", "description": "item id, e.g. minecraft:diamond_pickaxe" },
+        "fortune": { "type": "integer" },
+        "silk_touch": { "type": "boolean" },
+        "rolls": { "type": "integer" }
+      },
+      "required": ["x", "y", "z"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "get_container",
+    "description": "Read the contents of a container block (chest, hopper, furnace, dispenser, shulker, barrel...) without opening it. Admin-only by default; writes a one-line audit log entry.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "x": { "type": "integer" }, "y": { "type": "integer" }, "z": { "type": "integer" },
+        "dim": { "type": "string" }
+      },
+      "required": ["x", "y", "z"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "read_config",
+    "description": "Read a known config file by short name. mode=\"list\" returns the allowlisted names. Built-in entries: server.properties, agent-link.toml, agent-link-agent.toml, whitelist.json, ops.json, banned-players.json, banned-ips.json, forge-common.toml, forge-server.toml.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "mode": { "type": "string", "enum": ["read", "list"] },
+        "name": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "save_block_snapshot",
+    "description": "Save a region (volume <= 65536) to config/agent-link/snapshots/<name>.json (palette + RLE). Read-only side of the snapshot/restore pair; restore is not yet implemented.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "[A-Za-z0-9._-]{1,64}" },
+        "min": { "type": "object", "properties": { "x":{"type":"integer"}, "y":{"type":"integer"}, "z":{"type":"integer"} }, "required": ["x","y","z"] },
+        "max": { "type": "object", "properties": { "x":{"type":"integer"}, "y":{"type":"integer"}, "z":{"type":"integer"} }, "required": ["x","y","z"] },
+        "dim": { "type": "string" }
+      },
+      "required": ["name", "min", "max"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "get_scoreboard",
+    "description": "Read scoreboard objectives or teams. mode=\"objectives\" lists all objectives; mode=\"objective\" returns full per-player scores for one (`name` required); mode=\"teams\" lists teams and members.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "mode": { "type": "string", "enum": ["objectives", "objective", "teams"] },
+        "name": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "get_server_stats",
+    "description": "TPS, MSPT, memory used/max, loaded chunk count, and player count. Cheap to call.",
+    "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+  },
+  {
+    "name": "server_diagnose",
+    "description": "Bounded one-shot server health snapshot with a total timeout budget. Collects tick statistics, world/entity/chunk counts, recent WARN/ERROR logs, server-thread dump, installed mods, newest crash-report summary, optional spark stats, and conservative candidate findings. It never starts a profiler or uploads data.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "include_logs": { "type": "boolean", "description": "Include the recent WARN/ERROR/FATAL log tail. Default true." },
+        "include_crash_report": { "type": "boolean", "description": "Include metadata and key lines from the newest crash report. Default true." },
+        "include_crash_content": { "type": "boolean", "description": "Include a bounded crash-report text prefix. Default false; use read_server_file for the full report." },
+        "include_thread_dump": { "type": "boolean", "description": "Include server-related JVM threads and bounded stack frames. Default true." },
+        "include_mods": { "type": "boolean", "description": "Include the installed Forge mod list. Default true." },
+        "include_spark": { "type": "boolean", "description": "Include non-invasive spark availability and statistics when installed. Default true." },
+        "log_limit": { "type": "integer", "description": "Recent warning/error lines, clamped to 1..200. Default 80." },
+        "max_frames": { "type": "integer", "description": "Stack frames per server thread, clamped to 1..100. Default 20." },
+        "max_crash_bytes": { "type": "integer", "description": "Maximum crash-report prefix bytes, clamped to 4096..262144. Default 65536." },
+        "timeout_ms": { "type": "integer", "description": "Total diagnostic budget in milliseconds, clamped to 1000..30000. Default 12000." }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "agent_heartbeat",
+    "description": "Record that an MCP agent is online/active. Useful for in-game /agent status.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "action": { "type": "string", "description": "Optional short activity label, e.g. polling or diagnosing lag." }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "get_agent_requests",
+    "description": "Pull OP-created in-game requests submitted with /agent. Use since_seq/head_seq for incremental polling. Requests are queued until the agent replies or marks them done.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "since_seq": { "type": "number", "description": "Only return requests with seq > this value. Omit or 0 for the recent tail." },
+        "limit": { "type": "number", "description": "Max requests to return (default 20, hard cap 100)." },
+        "include_done": { "type": "boolean", "description": "Include done/failed/canceled requests. Default false." }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "update_agent_request_status",
+    "description": "Update an in-game /agent request status, optionally notifying the requesting player.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Request id from get_agent_requests, e.g. agent-12." },
+        "status": { "type": "string", "enum": ["pending", "working", "done", "failed", "canceled"], "description": "Default working." },
+        "message": { "type": "string", "description": "Short status message shown to the requesting player." },
+        "notify_player": { "type": "boolean", "description": "Default true." }
+      },
+      "required": ["id"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "reply_agent_request",
+    "description": "Reply to an in-game /agent request and send the response back to the requesting player.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Request id from get_agent_requests, e.g. agent-12." },
+        "message": { "type": "string", "description": "Reply text. Long replies are truncated/split for Minecraft chat." },
+        "mark_done": { "type": "boolean", "description": "Mark the request done after replying. Default true." },
+        "notify_player": { "type": "boolean", "description": "Send the reply to the requesting player if online. Default true." }
+      },
+      "required": ["id", "message"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "get_recent_events",
+    "description": "Pull recent server events (chat, joins, leaves, deaths) on demand. Use this when the user asks what's been happening on the server. Default returns up to 50 most recent events. Pass `since_seq` to fetch only new events since a previous call's `head_seq`. Pass `topics` to filter (e.g. just chat). The mod buffers ~1024 events; older ones are dropped.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "since_seq": {
+          "type": "number",
+          "description": "Only return events with seq > this value. Use the previous call's head_seq for incremental polling. Omit or 0 to get the tail of recent events."
+        },
+        "limit": {
+          "type": "number",
+          "description": "Max events to return (default 50, hard cap 200)."
+        },
+        "topics": {
+          "type": "array",
+          "items": { "type": "string", "enum": ["chat", "player_join", "player_leave", "player_death"] },
+          "description": "Optional filter. Omit to receive all topics."
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "get_recent_logs",
+    "description": "Pull recent server log lines (everything visible in the server console: /say output, mod logs, stack traces). Use this when investigating crashes, errors, or unexpected behavior. Default returns up to 100 most recent lines. Pass `since_seq` for incremental polling, `levels` to filter by severity, or `contains` for substring search. The mod buffers ~2048 lines.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "since_seq": {
+          "type": "number",
+          "description": "Only return logs with seq > this value. Use the previous call's head_seq for incremental polling. Omit or 0 for the tail."
+        },
+        "limit": {
+          "type": "number",
+          "description": "Max lines to return (default 100, hard cap 500)."
+        },
+        "levels": {
+          "type": "array",
+          "items": { "type": "string", "enum": ["TRACE", "DEBUG", "INFO", "WARN", "ERROR", "FATAL"] },
+          "description": "Optional level filter. Case-insensitive on the mod side. Omit for all levels."
+        },
+        "contains": {
+          "type": "string",
+          "description": "Optional substring filter applied to the message."
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "list_mods",
+    "description": "List installed mods (id, version, display name, description). Use this when investigating crashes or compatibility issues — pair with `read_server_file` on `crash-reports/*.txt` and `get_recent_logs`.",
+    "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+  },
+  {
+    "name": "read_server_file",
+    "description": "Read a file under the server root (read-only). Use this for `crash-reports/*.txt`, `logs/*.log`, mod config files, spark output, world settings, etc. Paths are relative to the server root; absolute paths and `..` escapes are rejected. Default cap is 256 KiB; set `max_bytes` up to 4 MiB. Returns base64 if the file is not valid UTF-8.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path": { "type": "string", "description": "e.g. \"crash-reports/crash-2025-01-15.txt\"" },
+        "offset": { "type": "number", "description": "Byte offset to start reading from. Default 0." },
+        "max_bytes": { "type": "number", "description": "Max bytes to read. Default 262144, hard cap 4194304." }
+      },
+      "required": ["path"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "list_dir",
+    "description": "List the contents of a directory under the server root. Pass an empty string or \".\" to list the server root. Returns each entry's name, is_dir, size (for files), and mtime_ms. Default cap is 500 entries.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path": { "type": "string", "description": "Server-root-relative directory; e.g. \"crash-reports\", \"config\", or \"\" for root." },
+        "max_entries": { "type": "number", "description": "Default 500, hard cap 5000." }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "write_config_file",
+    "description": "Write a file under the server root, gated by the operator's `write_allow` / `write_deny` glob lists in `config/agent-link.toml` (default: only `config/**` is writable). If the file already exists, the prior contents are auto-backed-up to `config/.agent-link-backup/<encoded-path>.<timestamp>.bak` before being overwritten. Set `overwrite: true` to replace an existing file. If you get `INVALID_ARGS` mentioning write_allow/write_deny, the path isn't permitted by the operator's policy — explain to the user, don't try to bypass.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path": { "type": "string", "description": "Server-root-relative path. Default policy allows `config/**` only; the operator may have widened or narrowed this." },
+        "content": { "type": "string", "description": "File contents. UTF-8 string by default; pass base64 if `encoding: \"base64\"`." },
+        "encoding": { "type": "string", "enum": ["utf-8", "base64"], "description": "Default utf-8." },
+        "overwrite": { "type": "boolean", "description": "Default false. Required true to replace an existing file." }
+      },
+      "required": ["path", "content"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "tick_profile",
+    "description": "Tick-time distribution over the last ~100 ticks (avg / p50 / p95 / p99 / max in mspt, plus tps). Use this when investigating lag — it reveals whether 19.5 TPS is steady-state or hides spikes. Pair with `thread_dump` to find what's blocking the server thread, or with `/spark profiler` for sampled flame graphs.",
+    "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+  },
+  {
+    "name": "tick_incidents",
+    "description": "Bounded timing history of recent slow server ticks. Records only ticks above 50 ms, coalesces continuous pressure to at most one incident per second, reports slow samples from the last 10 seconds, and does not claim causal attribution; use spark for the causal profile.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "limit": { "type": "integer", "description": "Number of most recent incident records to return, clamped to 1..32. Default 16." }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "thread_dump",
+    "description": "JVM thread dump (name, state, top stack frames per thread). Pair with `tick_profile` to see what `Server thread` is doing when mspt is high. Default 30 frames per thread; set `only_server: true` to filter to threads with 'Server' in the name.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "max_frames": { "type": "number", "description": "Frames per thread. Default 30, hard cap 200." },
+        "only_server": { "type": "boolean", "description": "Only include threads whose name contains 'Server'." }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "spark_status",
+    "description": "Probe whether the spark profiler mod (https://spark.lucko.me) is installed. Always succeeds — never errors. Returns `installed`, `command_available`, `api_available`, and (when present) the current profiler info string. Call this first before any other spark_* tool; if `installed: false`, fall back on `tick_profile` and `thread_dump` and tell the user spark would give better data.",
+    "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+  },
+  {
+    "name": "spark_stats",
+    "description": "Multi-window TPS / MSPT / CPU (process+system) / GC stats from the spark Java API. More detailed than `tick_profile` (which only sees the engine's 100-tick rolling average). Returns SPARK_UNAVAILABLE if spark isn't installed.",
+    "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+  },
+  {
+    "name": "spark_profiler_start",
+    "description": "Start a spark profiler sample. Non-blocking — returns once spark accepts the command. Pair with `spark_profiler_stop` after letting the sample run (~30-60s) to retrieve a viewer URL. Set `timeout` for hands-off operation (recommended): the profiler auto-stops and uploads. Call `spark_status` first to verify spark is installed.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "timeout": { "type": "number", "description": "Auto-stop after N seconds (1-3600). Recommended for hands-off use." },
+        "interval_ms": { "type": "number", "description": "Sample interval in ms. Default ~4ms; raise to reduce overhead." },
+        "only_ticks_over_ms": { "type": "number", "description": "Only record ticks slower than this (ms). Useful for spike hunting." },
+        "thread_all": { "type": "boolean", "description": "Sample every thread, not just Server thread." },
+        "alloc": { "type": "boolean", "description": "Allocation profile instead of CPU. Heavier." }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "spark_profiler_stop",
+    "description": "Stop the active spark profiler and wait briefly for the upload to finish, then return the viewer URL. spark uploads asynchronously — the URL appears via the captured chat output, not the immediate command return. Default wait is 15s; raise `wait_url_ms` for slow networks. If `url_present: false`, the upload is still in flight.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "comment": { "type": "string", "description": "Optional comment to attach to the sample (visible in viewer)." },
+        "save_to_file": { "type": "boolean", "description": "Save the sample locally instead of uploading. Pair with `read_server_file` on `spark/`." },
+        "wait_url_ms": { "type": "number", "description": "How long to wait for the upload URL (default 15000, max 60000)." }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "spark_profiler_cancel",
+    "description": "Cancel the active spark profiler without uploading. Use to abort a sample you no longer need.",
+    "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+  },
+  {
+    "name": "spark_health_report",
+    "description": "Generate a spark health report (TPS, CPU, memory, disk) and upload it for a shareable URL. Cheaper than a profiler sample — use this for a quick \"how's the server doing\" snapshot. Set `memory: true` and/or `network: true` for extra sections.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "memory": { "type": "boolean", "description": "Include detailed memory breakdown." },
+        "network": { "type": "boolean", "description": "Include network stats." },
+        "wait_url_ms": { "type": "number", "description": "How long to wait for the upload URL (default 45000, max 60000)." }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "whoami",
+    "description": "Report what YOU are allowed to do on this server: token tier, which tools bypass approval, which need an admin, whether an eligible approver is online right now, file-write globs, build zones, volume limits per tool, and which optional integrations (WorldEdit, spark) are installed. Call this FIRST on an unfamiliar server — it replaces discovering your limits by triggering denials.",
+    "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+  },
+
+  {
+    "name": "start_task",
+    "description": "Run another tool asynchronously; returns a task_id immediately. Use this for any operation that could take more than a few seconds — large fills, big region scans, snapshot restores — so the MCP call cannot time out mid-work. Sliceable tools additionally spread their work across ticks so the server keeps ticking. The wrapped tool still goes through the normal approval check before it is queued, so this is not a way to skip a prompt: a denial is returned here, synchronously.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "tool": { "type": "string", "description": "Name of the tool to run, exactly as in tools/list." },
+        "args": { "type": "object", "description": "Arguments for that tool, same shape as calling it directly." }
+      },
+      "required": ["tool"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "get_task",
+    "description": "Poll one async task. Returns status (pending/running/succeeded/failed/cancelled), progress {done,total,percent,message}, and the full result once finished. Set `wait_ms` to block server-side until it completes instead of polling in a loop — one call with wait_ms:5000 costs far less than ten polls.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "task_id": { "type": "string" },
+        "wait_ms": { "type": "number", "description": "Block up to this many ms waiting for a terminal state (max 30000). Default 0 = return immediately." }
+      },
+      "required": ["task_id"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "cancel_task",
+    "description": "Request cancellation of a running task. Cooperative: it stops at the next slice boundary, and anything already written to the world STAYS written — use undo_blocks to reverse a partial edit.",
+    "inputSchema": {
+      "type": "object",
+      "properties": { "task_id": { "type": "string" } },
+      "required": ["task_id"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "list_tasks",
+    "description": "List tracked async tasks, newest first. Results are omitted to keep the response small — fetch one with get_task.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "status": { "type": "string", "enum": ["pending", "running", "succeeded", "failed", "cancelled"] },
+        "limit": { "type": "number", "description": "Default 20, max 200." }
+      },
+      "additionalProperties": false
+    }
+  },
+
+  {
+    "name": "set_block",
+    "description": "Place ONE block, undoable via undo_blocks. Accepts the full vanilla block grammar including blockstate properties and block-entity NBT, so `minecraft:chest[facing=north]{Items:[{Slot:0b,id:\"minecraft:diamond\",Count:1b}]}` places an oriented, pre-filled chest in one call. Works without WorldEdit.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "pos": { "description": "{x,y,z} or [x,y,z]. Alternatively pass flat x/y/z." },
+        "x": { "type": "integer" },
+        "y": { "type": "integer" },
+        "z": { "type": "integer" },
+        "block": { "type": "string", "description": "e.g. \"stone\", \"oak_stairs[facing=east,half=top]\", \"barrel{Items:[...]}\"" },
+        "dim": { "type": "string", "description": "Default minecraft:overworld." }
+      },
+      "required": ["block"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "fill_blocks",
+    "description": "Fill a cuboid with one block, undoable. The main building primitive; needs no WorldEdit. Volume over 32768 returns VOLUME_TOO_LARGE telling you to re-issue through start_task, which slices the edit across ticks (up to 4,000,000) and reports progress — do NOT pre-split the region yourself.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "min": { "description": "{x,y,z} or [x,y,z]" },
+        "max": { "description": "{x,y,z} or [x,y,z]" },
+        "block": { "type": "string", "description": "Block to place; same grammar as set_block." },
+        "replace": { "description": "Only overwrite positions whose current block matches. A string or array of strings. A bare id (\"oak_log\") matches any blockstate of that block; adding properties (\"oak_log[axis=y]\") matches only those." },
+        "mode": { "type": "string", "enum": ["replace_all", "hollow", "outline"], "description": "replace_all (default) fills everything; hollow fills only the shell and leaves the interior untouched; outline fills the shell and clears the interior to air." },
+        "dim": { "type": "string" }
+      },
+      "required": ["min", "max", "block"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "set_blocks",
+    "description": "Write an arbitrary SET of positions as one undoable operation — for shapes that are not boxes (stairs, spirals, diffs computed from get_blocks_region). Vastly cheaper than one set_block per position. Over 20000 entries, re-issue through start_task. Use the palette form when many positions share few block types: it avoids repeating the block id on every entry, which is what dominates the request size.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "blocks": {
+          "type": "array",
+          "description": "Each entry is {pos, block} or {pos, p} where p indexes `palette`.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "pos": { "description": "{x,y,z} or [x,y,z]" },
+              "block": { "type": "string" },
+              "p": { "type": "integer", "description": "Index into `palette`." }
+            },
+            "required": ["pos"]
+          }
+        },
+        "palette": { "description": "Optional array of block specs referenced by each entry's `p`." },
+        "dim": { "type": "string" }
+      },
+      "required": ["blocks"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "undo_blocks",
+    "description": "Reverse native block writes (set_block / fill_blocks / set_blocks / restore_block_snapshot). Separate from we_undo, which covers WorldEdit edits only. mode:\"list\" inspects the stack without touching the world; pass operation_id to reverse one exact newest edit. The stack does NOT survive a server restart.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "mode": { "type": "string", "enum": ["undo", "list"], "description": "Default \"undo\"." },
+        "steps": { "type": "number", "description": "How many operations to reverse (1-32, default 1)." },
+        "operation_id": { "type": "string", "description": "Exact operation id from mode=list; only the newest edit can be named explicitly." }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "restore_block_snapshot",
+    "description": "Restore a region saved earlier by save_block_snapshot. Undoable. Optional `offset` places the region somewhere other than where it was captured, which makes snapshot+restore a working copy-paste without WorldEdit. Note the snapshot format stores bare block ids, so blockstate properties restore as defaults and block entities are not captured. Volume over 32768 must go through start_task.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Snapshot name; call list_snapshots to see what exists." },
+        "offset": { "description": "{x,y,z} or [x,y,z] shift applied to every position. Default no shift." },
+        "dim": { "type": "string", "description": "Defaults to the dimension recorded in the snapshot." },
+        "skip_air": { "type": "boolean", "description": "Skip air positions, pasting the structure without clearing around it. Default false." }
+      },
+      "required": ["name"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "list_snapshots",
+    "description": "List saved region snapshots with their dimension, bounds, volume and creation time, so you can pick one to restore.",
+    "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+  },
+  {
+    "name": "find_blocks",
+    "description": "Search a region for specific blocks and return only the matching positions plus per-block counts. Use this instead of paging get_blocks_region (capped at 4096 blocks) when you want to LOCATE something — \"where are the chests in this base\" is one call here versus hundreds there. Skips empty chunk sections, so scanning open sky is cheap. Volume over 4,000,000 must go through start_task.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "min": { "description": "{x,y,z} or [x,y,z]" },
+        "max": { "description": "{x,y,z} or [x,y,z]" },
+        "blocks": { "description": "Block id or array of ids to look for. A bare id matches any blockstate of that block." },
+        "limit": { "type": "number", "description": "Max positions returned (default 256, max 4096). Counts are always complete." },
+        "count_only": { "type": "boolean", "description": "Return totals without any positions. Cheapest way to ask \"how much of X is in here\"." },
+        "group_by_block": { "type": "boolean", "description": "Include per-block-id counts. Default true." },
+        "dim": { "type": "string" }
+      },
+      "required": ["min", "max", "blocks"],
+      "additionalProperties": false
+    }
+  },
+
+  {
+    "name": "get_nbt",
+    "description": "Read raw NBT from a block entity, entity, player, or inventory slot — the escape hatch for everything the structured tools do not model (enchantments, villager trades, spawner contents, banner patterns, modded block-entity internals). Returns both `snbt` (canonical, type-exact) and `nbt` (a JSON projection with a __types map so you can tell a byte from an int). Pass `path` to read one subtree instead of the whole blob; that matters for token cost.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "target": { "type": "string", "enum": ["block", "entity", "player", "item"], "description": "Default \"block\"." },
+        "pos": { "description": "target=block: {x,y,z} or [x,y,z]. Flat x/y/z also accepted." },
+        "x": { "type": "integer" },
+        "y": { "type": "integer" },
+        "z": { "type": "integer" },
+        "dim": { "type": "string" },
+        "uuid": { "type": "string", "description": "target=entity: UUID of a loaded entity (list_entities_near finds them)." },
+        "name": { "type": "string", "description": "target=player or item: player name." },
+        "slot": { "type": "integer", "description": "target=item: 0-8 hotbar, 9-35 main, 36-39 armor, 40 offhand." },
+        "path": { "type": "string", "description": "Vanilla NBT path, e.g. \"Items[0].tag.display.Name\" — same grammar as /data get." }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "set_nbt",
+    "description": "Write NBT to a block entity, entity, player, or inventory slot. PREFER `snbt` over `value`: JSON cannot express a byte vs an int, and Count:1 where vanilla wants Count:1b produces an item that silently vanishes. mode:\"merge\" (default) deep-merges and leaves unmentioned keys alone; mode:\"set\" replaces the value at `path` and requires one. Structural keys (UUID, Pos, id) are refused — use teleport or modify_entity for those effects.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "target": { "type": "string", "enum": ["block", "entity", "player", "item"], "description": "Default \"block\"." },
+        "mode": { "type": "string", "enum": ["merge", "set"], "description": "Default \"merge\"." },
+        "snbt": { "type": "string", "description": "Payload in SNBT, e.g. \"{CustomName:'{\\\"text\\\":\\\"Vault\\\"}'}\". Preferred — type-exact." },
+        "value": { "description": "Payload as JSON. Convenience only: integral numbers become ints, fractional become doubles." },
+        "path": { "type": "string", "description": "Target a subtree instead of the root. Required for mode:\"set\"." },
+        "pos": { "description": "target=block: {x,y,z} or [x,y,z]." },
+        "x": { "type": "integer" },
+        "y": { "type": "integer" },
+        "z": { "type": "integer" },
+        "dim": { "type": "string" },
+        "uuid": { "type": "string", "description": "target=entity." },
+        "name": { "type": "string", "description": "target=player or item." },
+        "slot": { "type": "integer", "description": "target=item." }
+      },
+      "additionalProperties": false
+    }
+  },
+
+  {
+    "name": "teleport",
+    "description": "Move a player or entity, including across dimensions. Structured alternative to /tp: no arbitrary-console permission needed, and the result reports both the old and new position. `to_surface` snaps to the highest solid block at that column, which is what you want when you have good X/Z from a map but do not know what Y is standing room.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Player to move." },
+        "uuid": { "type": "string", "description": "Or any loaded entity by UUID." },
+        "to": { "description": "Destination {x,y,z} or [x,y,z]." },
+        "to_player": { "type": "string", "description": "Or teleport to this player's current location." },
+        "to_surface": { "type": "boolean", "description": "Snap Y to the surface at the destination column." },
+        "dim": { "type": "string", "description": "Destination dimension. Default: keep the subject's current one." },
+        "yaw": { "type": "number" },
+        "pitch": { "type": "number" }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "give_item",
+    "description": "Give items to a player. Accepts the full vanilla item grammar, so enchantments and custom names work: \"diamond_pickaxe{Enchantments:[{id:\\\"minecraft:efficiency\\\",lvl:5s}]}\". Reports how many actually fit versus were dropped, instead of silently scattering the remainder like /give does.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "item": { "type": "string", "description": "Item id plus optional NBT." },
+        "count": { "type": "number", "description": "Total items (default 1, max 6912). Split into stacks automatically." },
+        "drop_overflow": { "type": "boolean", "description": "Drop what does not fit at the player's feet. Default true; false leaves it undelivered and says so." }
+      },
+      "required": ["name", "item"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "set_gamemode",
+    "description": "Change a player's game mode. Reports the previous mode so you can restore it afterwards.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "gamemode": { "type": "string", "enum": ["survival", "creative", "adventure", "spectator"] }
+      },
+      "required": ["name", "gamemode"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "apply_effect",
+    "description": "Apply or clear a status effect on a player or mob. Practical use is protecting a subject while you work — night vision and fire resistance for nether builds, slow falling before a long teleport — or clearing a debuff you caused. mode:\"clear\" with no `effect` removes everything.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Player name." },
+        "uuid": { "type": "string", "description": "Or a loaded living entity by UUID." },
+        "mode": { "type": "string", "enum": ["apply", "clear"], "description": "Default \"apply\"." },
+        "effect": { "type": "string", "description": "e.g. minecraft:night_vision. Omit with mode:\"clear\" to remove all." },
+        "seconds": { "type": "number", "description": "Duration (default 30). Ignored for instant effects." },
+        "amplifier": { "type": "number", "description": "0 = level I. Default 0, max 255." },
+        "ambient": { "type": "boolean" },
+        "show_particles": { "type": "boolean", "description": "Default true." },
+        "show_icon": { "type": "boolean", "description": "Default true." }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "spawn_entity",
+    "description": "Spawn entities with optional NBT — decoration (armor stands, item frames), or setting up a scenario. NBT support means a named, equipped, no-AI armor stand is one call rather than spawn-then-patch. Count is capped at 64: a summon loop is the easiest way to wreck a server's entity budget.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "type": { "type": "string", "description": "Entity id, e.g. minecraft:armor_stand. See list_entity_ids." },
+        "pos": { "description": "{x,y,z} or [x,y,z]." },
+        "count": { "type": "number", "description": "Default 1, max 64." },
+        "nbt": { "type": "string", "description": "SNBT applied to each spawned entity." },
+        "custom_name": { "type": "string" },
+        "name_visible": { "type": "boolean" },
+        "no_ai": { "type": "boolean", "description": "Freeze mob AI — for decoration." },
+        "persistent": { "type": "boolean", "description": "Prevent distance-based despawn." },
+        "dim": { "type": "string" }
+      },
+      "required": ["type", "pos"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "remove_entities",
+    "description": "Remove entities — one by UUID, or every match within a radius. The standard fix for lag from dropped items or piled-up mobs. Players are NEVER removed, and there is no flag for it. An unfiltered bulk call DEFAULTS TO A PREVIEW (dry_run) and returns counts by type; review that, then re-issue with dry_run:false. mode \"discard\" removes silently with no drops; \"kill\" runs normal death handling so loot and XP drop.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "uuid": { "type": "string", "description": "Single-entity form." },
+        "center": { "description": "Bulk form: {x,y,z} or [x,y,z]." },
+        "radius": { "type": "number", "description": "Default 16, max 128." },
+        "types": { "description": "Entity ids to match, e.g. [\"item\", \"zombie\"]. Bare names get the minecraft: namespace." },
+        "categories": { "description": "Coarse buckets: item, xp_orb, mob, projectile, other. Same names as list_entities_near." },
+        "mode": { "type": "string", "enum": ["discard", "kill"], "description": "Default \"discard\"." },
+        "dry_run": { "type": "boolean", "description": "Preview only. Defaults to TRUE when no types/categories filter is given." },
+        "limit": { "type": "number", "description": "Cap on removals (max 20000)." },
+        "dim": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "modify_entity",
+    "description": "Change the common, safe attributes of an existing entity with validation, instead of hand-writing NBT tag types. Every field is optional; only what you pass changes, and the result reports before/after for each. Use set_nbt for anything not listed here.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Player name." },
+        "uuid": { "type": "string", "description": "Or a loaded entity by UUID." },
+        "custom_name": { "type": "string", "description": "Empty string clears it." },
+        "name_visible": { "type": "boolean" },
+        "silent": { "type": "boolean" },
+        "invulnerable": { "type": "boolean" },
+        "glowing": { "type": "boolean" },
+        "no_gravity": { "type": "boolean" },
+        "fire_seconds": { "type": "number", "description": "0 extinguishes." },
+        "health": { "type": "number", "description": "Living entities only; must be > 0 and <= max health." },
+        "no_ai": { "type": "boolean", "description": "Mobs only." },
+        "persistent": { "type": "boolean", "description": "Mobs only; can only be turned on." }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "set_world_property",
+    "description": "Set time, weather, difficulty, or a gamerule — the write side of get_world_info, which could previously only report them. Gamerule names and value types are validated against the real registry, so a typo is an error here rather than a silently ignored command.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "property": { "type": "string", "enum": ["time", "weather", "difficulty", "gamerule"] },
+        "value": { "description": "time: tick count, or a preset (day/noon/sunset/night/midnight/sunrise). weather: clear/rain/thunder. difficulty: peaceful/easy/normal/hard. gamerule: the new value as a string." },
+        "rule": { "type": "string", "description": "property=gamerule: the rule id, e.g. doDaylightCycle. get_world_info lists them all with current values." },
+        "seconds": { "type": "number", "description": "property=weather: how long it lasts. Default 300." },
+        "add": { "type": "boolean", "description": "property=time: add to the current time instead of setting it." },
+        "all_dimensions": { "type": "boolean", "description": "property=time: apply to every dimension. Default true." },
+        "dim": { "type": "string" }
+      },
+      "required": ["property"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "force_load_chunks",
+    "description": "Force-load, release, or list force-loaded chunks. Most world tools silently need the target chunk loaded — reads return \"not found\" and writes can be discarded otherwise — so force-load your working area before editing coordinates nobody is standing near. IMPORTANT: force-loaded chunks tick forever and persist across restarts, so release them (mode:\"remove\" or \"clear\") when finished. Capped at 1024 chunks per call.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "mode": { "type": "string", "enum": ["add", "remove", "list", "clear"], "description": "Default \"add\". \"clear\" releases every force-loaded chunk in the dimension." },
+        "min": { "description": "Block region form: {x,y,z} or [x,y,z]." },
+        "max": { "description": "Block region form." },
+        "chunk": { "type": "object", "description": "Chunk-coordinate form: {x,z}.", "properties": { "x": { "type": "integer" }, "z": { "type": "integer" } } },
+        "chunk_radius": { "type": "number", "description": "With `chunk`: radius in chunks (0-16). Default 0." },
+        "dim": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "save_world",
+    "description": "Flush the world to disk. Call this after a large build or repair so the change is durable instead of living in memory until the next autosave — otherwise a crash makes your \"done\" report false. Runs on the server thread, so do not call it in a loop.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "flush": { "type": "boolean", "description": "Wait for chunk writes to actually land. Default true." }
+      },
+      "additionalProperties": false
+    }
+  },
+
+  {
+    "name": "manage_players",
+    "description": "Structured player administration: list online and stored lists, kick, ban/pardon players or IPs, op/deop profiles, and manage the whitelist. Offline profiles must be online, cached, or supplied with both uuid and player_name.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "action": { "type": "string", "enum": ["list", "kick", "ban", "pardon", "ban_ip", "pardon_ip", "op", "deop", "whitelist_add", "whitelist_remove", "whitelist_enable", "whitelist_disable", "whitelist_reload"] },
+        "name": { "type": "string", "description": "Online or cached player name." },
+        "player_name": { "type": "string", "description": "Display name to store with an offline UUID." },
+        "uuid": { "type": "string" },
+        "ip": { "type": "string", "description": "IP address for ban_ip or pardon_ip; ban_ip can derive it from an online player target." },
+        "reason": { "type": "string" },
+        "source": { "type": "string", "description": "Ban-list source label. Default agent-link." },
+        "duration_seconds": { "type": "integer", "description": "0 means permanent." },
+        "level": { "type": "integer", "description": "OP permission level 1..4. Default server operator level." },
+        "bypass_player_limit": { "type": "boolean" }
+      },
+      "required": ["action"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "manage_player_inventory",
+    "description": "Directly edit an online player's inventory slots. Supports clear inventory/slot, replace a slot with a full vanilla item specification, swap slots, change the selected hotbar slot, and intentionally drop a slot. Use get_player_inventory to inspect first.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "action": { "type": "string", "enum": ["clear_inventory", "clear_slot", "set_slot", "swap_slots", "set_selected_slot", "drop_slot"] },
+        "name": { "type": "string" },
+        "slot": { "type": "integer", "description": "0..40: hotbar/main/armor/offhand depending on the slot." },
+        "item": { "type": "string", "description": "Item id plus optional NBT for set_slot." },
+        "count": { "type": "integer" },
+        "first_slot": { "type": "integer" },
+        "second_slot": { "type": "integer" }
+      },
+      "required": ["action", "name"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "manage_scoreboard",
+    "description": "Create/remove scoreboard objectives, set/add/reset holder scores, create/remove/configure teams, manage team membership, and set display slots. Use get_scoreboard for reads.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "action": { "type": "string", "enum": ["create_objective", "remove_objective", "set_score", "add_score", "reset_score", "create_team", "remove_team", "add_team_member", "remove_team_member", "configure_team", "set_display"] },
+        "name": { "type": "string", "description": "Objective or team name, depending on action." },
+        "criteria": { "type": "string", "description": "Objective criteria, default dummy." },
+        "display_name": { "type": "string" },
+        "render_type": { "type": "string", "enum": ["integer", "hearts"] },
+        "holder": { "type": "string" },
+        "objective": { "type": "string" },
+        "value": { "type": "integer" },
+        "team": { "type": "string" },
+        "member": { "type": "string" },
+        "slot": { "type": "string", "description": "list, sidebar, below_name, or a teams sidebar slot." },
+        "color": { "type": "string" },
+        "allow_friendly_fire": { "type": "boolean" },
+        "see_friendly_invisibles": { "type": "boolean" },
+        "name_tag_visibility": { "type": "string" },
+        "death_message_visibility": { "type": "string" },
+        "collision_rule": { "type": "string" }
+      },
+      "required": ["action"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "control_entity",
+    "description": "Typed controls for loaded entities: mount/dismount, damage/heal, kill/discard, velocity, rotation, equipment, and base attributes. kill/discard require confirmed=true; targeting a player additionally requires allow_player=true.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "action": { "type": "string", "enum": ["mount", "dismount", "damage", "heal", "kill", "discard", "velocity", "rotation", "equipment", "attribute"] },
+        "name": { "type": "string", "description": "Player name for the main subject." },
+        "uuid": { "type": "string", "description": "Loaded entity UUID for the main subject." },
+        "rider_name": { "type": "string" },
+        "rider_uuid": { "type": "string" },
+        "vehicle_name": { "type": "string" },
+        "vehicle_uuid": { "type": "string" },
+        "amount": { "type": "number" },
+        "cause": { "type": "string", "description": "generic, magic, fire, lava, fall, drown, starve, wither, or freeze." },
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "z": { "type": "number" },
+        "yaw": { "type": "number" },
+        "pitch": { "type": "number" },
+        "slot": { "type": "string", "description": "Equipment slot: head, chest, legs, feet, mainhand, or offhand." },
+        "item": { "type": "string" },
+        "count": { "type": "integer" },
+        "attribute": { "type": "string", "description": "Attribute id, e.g. minecraft:generic.max_health." },
+        "base_value": { "type": "number" },
+        "confirmed": { "type": "boolean" },
+        "allow_player": { "type": "boolean" }
+      },
+      "required": ["action"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "set_world_spawn",
+    "description": "Set the shared spawn point in one dimension or every loaded dimension. This is the typed equivalent of /setworldspawn.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "pos": { "description": "{x,y,z} or [x,y,z]." },
+        "x": { "type": "integer" },
+        "y": { "type": "integer" },
+        "z": { "type": "integer" },
+        "angle": { "type": "number" },
+        "dim": { "type": "string" },
+        "all_dimensions": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "set_world_border",
+    "description": "Read or mutate the vanilla world border: center, fixed size, timed lerp, damage settings, warnings, or reset. This is the typed equivalent of /worldborder.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "action": { "type": "string", "enum": ["get", "center", "size", "lerp", "damage", "warning", "reset"] },
+        "dim": { "type": "string" },
+        "center": { "type": "object", "properties": { "x": { "type": "number" }, "z": { "type": "number" } } },
+        "x": { "type": "number" },
+        "z": { "type": "number" },
+        "size": { "type": "number" },
+        "from": { "type": "number" },
+        "to": { "type": "number" },
+        "duration_ticks": { "type": "integer" },
+        "damage_per_block": { "type": "number" },
+        "safe_zone": { "type": "number" },
+        "warning_blocks": { "type": "integer" },
+        "warning_seconds": { "type": "integer" }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "server_control",
+    "description": "Explicit server lifecycle/runtime controls: save, reload selected resources, stop, change view/simulation distance, or allow cheats for all players. stop requires confirmed=true and cannot restart the JVM; use an external supervisor for restart.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "action": { "type": "string", "enum": ["save", "reload_resources", "stop", "set_view_distance", "set_simulation_distance", "set_allow_cheats"] },
+        "flush": { "type": "boolean" },
+        "confirmed": { "type": "boolean" },
+        "chunks": { "type": "integer", "description": "2..32 for distance actions." },
+        "enabled": { "type": "boolean" }
+      },
+      "required": ["action"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "manage_container",
+    "description": "Write slots in a loaded block container such as a chest, hopper, dispenser, barrel, or shulker. Supports replacing/clearing one slot, clearing the container, and swapping two slots. Use get_container to inspect first.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "action": { "type": "string", "enum": ["set_slot", "clear_slot", "clear_container", "swap_slots"] },
+        "dim": { "type": "string" },
+        "pos": { "description": "{x,y,z} or [x,y,z]." },
+        "x": { "type": "integer" },
+        "y": { "type": "integer" },
+        "z": { "type": "integer" },
+        "slot": { "type": "integer" },
+        "item": { "type": "string", "description": "Item id plus optional NBT." },
+        "count": { "type": "integer" },
+        "first_slot": { "type": "integer" },
+        "second_slot": { "type": "integer" }
+      },
+      "required": ["action"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "set_player_state",
+    "description": "Set typed state on an online player: health, absorption, food/saturation, air, experience, fire, and ability flags. Returns a before/after snapshot.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "health": { "type": "number" },
+        "absorption": { "type": "number" },
+        "food": { "type": "integer", "description": "0..20." },
+        "saturation": { "type": "number" },
+        "air": { "type": "integer" },
+        "experience_points": { "type": "integer" },
+        "experience_levels": { "type": "integer" },
+        "fire_seconds": { "type": "integer", "description": "0 extinguishes." },
+        "invulnerable": { "type": "boolean" },
+        "mayfly": { "type": "boolean" },
+        "flying": { "type": "boolean" }
+      },
+      "required": ["name"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "manage_player_progression",
+    "description": "List recipes and grant/revoke recipes or advancement criteria for an online player. Advancement criterion omitted or '*' means all criteria.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "action": { "type": "string", "enum": ["list_recipes", "grant_recipes", "revoke_recipes", "inspect_advancement", "grant_advancement", "revoke_advancement"] },
+        "name": { "type": "string" },
+        "contains": { "type": "string", "description": "list_recipes substring filter." },
+        "limit": { "type": "integer" },
+        "recipe": { "type": "string" },
+        "recipes": { "type": "array", "items": { "type": "string" } },
+        "advancement": { "type": "string" },
+        "criterion": { "type": "string", "description": "Default '*'." }
+      },
+      "required": ["action"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "manage_datapacks",
+    "description": "List available/selected data packs, enable or disable packs, and reload selected resources through PackRepository. JVM/mod restart is not implied.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "action": { "type": "string", "enum": ["list", "enable", "disable", "reload"] },
+        "id": { "type": "string" },
+        "ids": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "we_status",
+    "description": "Report whether WorldEdit or FAWE is installed, its version, and the current agent undo depth. Call this before any we_* tool — they are disabled with a clear error when WorldEdit is absent. The native set_block / fill_blocks / set_blocks tools always work and need no WorldEdit.",
+    "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+  },
+  {
+    "name": "we_set",
+    "description": "Fill a cuboid via WorldEdit (volume <= 200000), reversible with we_undo. Faster than fill_blocks on very large selections and dispatched asynchronously when FAWE is present. Requires WorldEdit; use fill_blocks otherwise.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "min": { "type": "object", "properties": { "x": {"type": "integer"}, "y": {"type": "integer"}, "z": {"type": "integer"} }, "required": ["x","y","z"] },
+        "max": { "type": "object", "properties": { "x": {"type": "integer"}, "y": {"type": "integer"}, "z": {"type": "integer"} }, "required": ["x","y","z"] },
+        "block": { "type": "string" },
+        "dim": { "type": "string" }
+      },
+      "required": ["min", "max", "block"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "we_replace",
+    "description": "Replace matching blocks inside a cuboid via WorldEdit, reversible with we_undo. Requires WorldEdit; fill_blocks with `replace` is the native equivalent.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "min": { "type": "object", "properties": { "x": {"type": "integer"}, "y": {"type": "integer"}, "z": {"type": "integer"} }, "required": ["x","y","z"] },
+        "max": { "type": "object", "properties": { "x": {"type": "integer"}, "y": {"type": "integer"}, "z": {"type": "integer"} }, "required": ["x","y","z"] },
+        "from": { "description": "Block id or array of ids to match." },
+        "to": { "type": "string", "description": "Replacement block." },
+        "dim": { "type": "string" }
+      },
+      "required": ["min", "max", "from", "to"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "we_sphere",
+    "description": "Generate a sphere via WorldEdit, reversible with we_undo. There is no native equivalent — use this for round shapes, or compute the positions yourself and pass them to set_blocks.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "center": { "type": "object", "properties": { "x": {"type": "integer"}, "y": {"type": "integer"}, "z": {"type": "integer"} }, "required": ["x","y","z"] },
+        "radius": { "type": "number", "description": "Max 50." },
+        "block": { "type": "string" },
+        "hollow": { "type": "boolean", "description": "Shell only." },
+        "dim": { "type": "string" }
+      },
+      "required": ["center", "radius", "block"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "we_cyl",
+    "description": "Generate a bottom-centered cylinder via WorldEdit, reversible with we_undo.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "center": { "type": "object", "properties": { "x": {"type": "integer"}, "y": {"type": "integer"}, "z": {"type": "integer"} }, "required": ["x","y","z"] },
+        "radius": { "type": "number", "description": "Max 50." },
+        "height": { "type": "number", "description": "Max 256." },
+        "block": { "type": "string" },
+        "hollow": { "type": "boolean" },
+        "dim": { "type": "string" }
+      },
+      "required": ["center", "radius", "block"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "we_undo",
+    "description": "Reverse the last N WorldEdit operations this agent performed. Covers we_* tools ONLY — native writes (set_block, fill_blocks, set_blocks, restore_block_snapshot) live on a separate stack reversed by undo_blocks.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "steps": { "type": "number", "description": "1-10, default 1." },
+        "dim": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  }
+]

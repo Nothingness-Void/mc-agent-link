@@ -4,7 +4,21 @@
 
 让 AI agent(通过 [Model Context Protocol](https://modelcontextprotocol.io))接管你的 Minecraft 服务器。跑命令、查玩家、读日志、看 crash 报告、profile 卡顿、调 mod 配置,以及**原生方块写入、NBT 读写、玩家/实体/世界控制、异步长任务** —— op 在控制台能干的事 agent 都能干,而且大部分不用再走 `run_console_command`。
 
-> **状态**:早期。先支持 Forge 1.20.1 服务端,NeoForge / Fabric / Paper 计划中。
+> **状态**:早期。当前维护 Forge 1.20.1、NeoForge 1.21.1，以及面向 Spigot/Paper 1.20+ 的基础链接插件。
+
+## 版本支持
+
+| Minecraft | 加载器 | Java | 基础 Mod | 可选游戏内附属 |
+|---|---|---:|---|---|
+| 1.20.1 | Forge | 17 | `minecraft/forge-mod` | `mc-agent-link-agent` 根项目 |
+| 1.21.1 | NeoForge | 21 | `minecraft/neoforge-mod` | `mc-agent-link-agent/neoforge-mod` |
+| 1.20+ | Spigot/Paper | 17+* | `minecraft/spigot-plugin` | 不需要附属；只提供基础链接 |
+
+Forge/NeoForge 两个基础 Mod 使用同一套 MCP、权限、请求队列、异步任务和 addon API；加载器入口、事件总线和网络 payload 层分别适配。不要把 Forge jar 和 NeoForge jar 混装。
+
+Spigot 插件是独立实现：它复用 agent-link 的 MCP/配对协议，但不提供 `mc-agent-link-agent` 的 `/agent`、GUI、游戏内请求队列或 steer 功能。默认 JAR 使用 Bukkit 1.20.1 最低公共 API 编译，面向现代 1.20+ Spigot/Paper。完整安装和构建说明见 [`minecraft/spigot-plugin/README.md`](minecraft/spigot-plugin/README.md)。
+
+*插件字节码以 Java 17 构建；服务端 JVM 要求仍按 Minecraft 版本决定，1.20.5+/1.21 通常需要 Java 21。
 
 [English README](README.en.md) · [安装指南(给 agent 用)](INSTALL.md) · [协议规范](docs/protocol.md)
 
@@ -42,7 +56,7 @@ Claude Code、Cursor、自定义 agent 都说 MCP,但 Minecraft 服务器不说�
 | 异步任务 | `start_task` `get_task` `cancel_task` `list_tasks` | 长任务从单次 RPC 解耦:立刻返回 task_id,分 tick 执行 + 进度上报 + 可取消 |
 | 注册表 | `list_block_ids` `list_item_ids` `list_entity_ids` `list_biome_ids` | 分页 + 子串过滤 |
 | 诊断 | `server_diagnose` `get_server_stats` `tick_profile` `tick_incidents` `thread_dump` `list_mods` | 一次汇总健康快照、候选根因、TPS/MSPT、慢 tick 事故历史、世界/实体/区块、日志、线程、崩溃摘要和 mod 列表 |
-| 游戏内请求 API | `agent_heartbeat` `get_agent_requests` `update_agent_request_status` `reply_agent_request` | 主 mod 提供请求队列和 MCP API;游戏内 `/agent` 命令由可选附属 mod `mc-agent-link-agent` 提供 |
+| 游戏内请求 API | `agent_heartbeat` `get_agent_requests` `update_agent_request_status` `reply_agent_request` | Forge/NeoForge 基础 Mod 提供请求队列和 MCP API；游戏内 `/agent` 命令由可选附属 mod `mc-agent-link-agent` 提供；Spigot 插件明确不实现这一层 |
 | 观察(pull) | `get_recent_events` `get_recent_logs` | 聊天/进出/死亡,外加 **command / container_open / entity_death / explosion / player_hurt / advancement / dimension_change**;`block_place` 等高频 topic 按需开启 |
 | 文件(沙盒) | `list_dir` `read_server_file` `read_config` `write_config_file` | 服务端 root 下任意文件**只读**;`config/**` 才能写,且自动备份 |
 | Spark 集成(选装) | `spark_status` `spark_stats` `spark_profiler_start/stop/cancel` `spark_health_report` | 装了 [spark](https://spark.lucko.me) mod 之后,agent 能跑火焰图、拿 viewer URL、读 GC 细节 |
@@ -103,7 +117,9 @@ mc-agent-link/
 ├── docs/
 │   └── protocol.md         # agent-link 线协议规范
 ├── minecraft/
-│   └── forge-mod/          # Forge 1.20.1 mod(Java 17, Gradle)
+│   ├── forge-mod/          # Forge 1.20.1 mod(Java 17, Gradle)
+│   ├── neoforge-mod/       # NeoForge 1.21.1 mod(Java 21, Gradle)
+│   └── spigot-plugin/      # Spigot/Paper 1.20+ plugin(Java 17; base link only)
 ├── packages/
 │   └── mcp-server/         # Node MCP bridge(TypeScript,stdio fallback)
 └── INSTALL.md              # 安装指南(给 agent 自动读取用)
@@ -111,23 +127,33 @@ mc-agent-link/
 
 ## 快速开始
 
+根据服务器加载器选择对应版本的基础 Mod 和可选附属 Mod:
+
+- **Forge 1.20.1**: `minecraft/forge-mod` + `mc-agent-link-agent` 根项目
+- **NeoForge 1.21.1**: `minecraft/neoforge-mod` + `mc-agent-link-agent/neoforge-mod`
+- **Spigot/Paper 1.20+**: `minecraft/spigot-plugin`，使用 `agent-link-spigot-modern-*.jar`，只放入服务端 `plugins/`，不安装 `mc-agent-link-agent`
+
 傻瓜式安装:
 
-1. **装 mod**:把 `agent-link-forge-1.20.1-*.jar` 丢进服务器 `mods/`,启动服务器。
-2. **复制 setup link**:控制台会打印一行 `agent-link setup link (...)`。这条链接 10 分钟内一次性有效;如果没配对成功,mod 会自动刷新并打印新链接。OP 或控制台也可以运行 `/agentlink pair` 立刻生成新链接。
-3. **发给 agent**:把整条 setup link 发给 Claude Code / Cursor / 自定义 agent。agent 会用 `/pair` 换取 MCP 配置、写入 host 配置,再调用 `ping` 验证。
+1. **装基础 mod**:把所选版本的 `agent-link-*.jar` 丢进服务器 `mods/`,启动服务器；需要游戏内 `/agent` 命令时，再放入同版本的附属 jar。
+2. **复制本地 setup endpoint**:首次未配对时,控制台会打印一行 `agent-link local setup endpoint (...)`,形如 `http://127.0.0.1:25581/pair/setup/<random-id>`。agent 直接 GET 这条 URL,不需要访问 GitHub。
+3. **发给 agent**:把整条本地 URL 发给 Claude Code / Cursor / 自定义 agent。agent 会自动 GET/POST 换取 MCP 配置,只合并写入 host 配置中的 `mcpServers.minecraft`,再按 `whoami`、`ping` 顺序验证。配对成功后 token 会持久化,重启服务器不会继续刷新链接；要配第二个 agent 时管理员再运行 `/agentlink pair` 或 `/agentlink pair-guest`。
 
-setup link 长这样:
+Spigot/Paper 插件的默认端口仍是 `25580`(WebSocket) 和 `25581`(MCP HTTP)，配置文件为 `plugins/AgentLink/config.yml`。它只注册 `/agentlink` 管理命令，不注册 `/agent`；需要游戏内 agent 控制时必须使用对应的 Forge/NeoForge 基础 Mod + 附属 Mod。
+
+旧版本 setup link 长这样(仅兼容保留):
 
 ```text
 https://github.com/Nothingness-Void/mc-agent-link/blob/main/AGENTS.md#agent-link-setup=...
 ```
 
-如果配对过期,看控制台最新的 refreshed setup link,或运行 `/agentlink pair` 手动刷新;如果已被使用,说明配对已经成功。
+如果本地 endpoint 过期,运行 `/agentlink pair` 重新生成；如果已被使用,先检查现有 host 配置。若日志显示 pairing already exists; setup endpoint suppressed,说明已有持久 token，重启后不再打印链接是正常的；新 agent 必须让管理员重新运行 `/agentlink pair` 或 `/agentlink pair-guest`。
+
+服务器和 agent 不在同一台机器时，Forge/NeoForge 同时设置 `allow_remote = true`、`mcp_public_host` 和可信的 `mcp_allowed_origins`；Spigot/Paper 设置 `mcp.allow-remote`、`mcp.public-host` 和 `mcp.allowed-origins`。详细流程见 [docs/pairing.zh-CN.md](docs/pairing.zh-CN.md)。
 
 服务器在别的机器上的话:把 `agent-link.toml` 里的 `allow_remote` 改成 `true`,把 `mcp_allowed_origins` 收紧到信任的 client,重启,并确保防火墙放行 `mcp_listen_port`。
 
-**用旧 host 不支持 HTTP transport?** 仓库里的 Node bridge(`packages/mcp-server`)走 stdio + WebSocket,详见 [INSTALL.md 附录 A](INSTALL.md#附录-a--node-bridgestdio兼容路径)。这是兼容路径,新安装优先用 setup link + HTTP。
+**用旧 host 不支持 HTTP transport?** 仓库里的 Node bridge(`packages/mcp-server`)走 stdio + WebSocket,详见 [INSTALL.md 附录 A](INSTALL.md#附录-a--node-bridgestdio兼容路径)。这是兼容路径,新安装优先用本地 setup endpoint + HTTP。
 
 ## 让 agent 知道怎么用
 
@@ -181,9 +207,9 @@ https://github.com/Nothingness-Void/mc-agent-link/blob/main/AGENTS.md#agent-link
 
 ## 路线图
 
-- [ ] NeoForge 实现
+- [x] NeoForge 1.21.1 实现
+- [x] Spigot/Paper 1.20+ 基础链接插件
 - [ ] Fabric 实现
-- [ ] Paper 实现
 - [ ] 自动应用补丁(目前 agent 只建议,人确认)
 - [ ] CI + 单元测试
 

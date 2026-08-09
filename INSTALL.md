@@ -1,40 +1,45 @@
 # 安装指南(给 agent 读)
 
-> **目标读者**:任何能读 markdown 的 AI agent。把这份文档丢给 Claude Code / Cursor / 自定义 agent,它应该能照步骤把 mc-agent-link 装到用户的 Minecraft 服务器上,无需用户手动操作除了"放 jar 进 mods/ 启动一次"之外的事。
+> **目标读者**:任何能读 markdown 的 AI agent。把这份文档丢给 Claude Code / Cursor / 自定义 agent,它应该能照步骤把 mc-agent-link 装到用户的 Minecraft 服务器上。用户通常只需要按加载器放入一次 jar 并启动服务器；Spigot/Paper 使用 plugins/，Forge/NeoForge 使用 mods/。
 
-> **推荐路径是 setup link + HTTP 直连** —— mod 自己暴露 MCP HTTP endpoint,并在开服时打印一次性 setup link。agent 用链接完成配对、写 MCP host 配置。不需要 Node bridge。Bridge 路径(stdio)保留作为兼容/老配置,见文末 **附录 A**。
+> **推荐路径是本地 setup endpoint + HTTP 直连** —— mod 自己暴露 MCP HTTP endpoint,并在首次配对时打印一次性本地 URL。agent 用 URL 完成配对、写 MCP host 配置。不需要 Node bridge。完整配对协议见 [docs/pairing.zh-CN.md](docs/pairing.zh-CN.md)。Bridge 路径(stdio)保留作为兼容/老配置,见文末 **附录 A**。
 
 ## 安装前提(确认这些再继续)
 
 让 agent 检查或问用户:
 
-1. 用户的 Minecraft 服务器是 **Forge 1.20.1**。其他版本/loader 当前不支持。
+1. 用户的 Minecraft 服务器是 **Forge 1.20.1**、**NeoForge 1.21.1**，或 **Spigot/Paper 1.20+**。必须按加载器选择对应的 jar；其他版本/loader 当前不支持。
 2. 用户的 agent host 支持 **MCP 客户端配置**,且支持 HTTP transport(Claude Code 1.0+、Cursor 0.42+、Zed Preview、Continue 都行)。
-3. agent 能访问用户的服务器 `mods/` 目录(本地路径或 SSH/SFTP)。
+3. agent 能访问用户的服务器 `mods/` 或 `plugins/` 目录(本地路径或 SSH/SFTP)。
 4. agent 能读写用户的 MCP host 配置文件(典型路径见下文)。
 
 任一不满足:停下来告诉用户,不要硬装。
 
-## 两个产物
+## 可选产物
 
 | 产物 | 位置 | 谁放 |
 |---|---|---|
-| Forge mod jar | `<server>/mods/agent-link-forge-1.20.1-*.jar` | 用户(或 agent 通过 SCP) |
+| Forge 1.20.1 mod jar | `<server>/mods/agent-link-forge-1.20.1-*.jar` | 用户(或 agent 通过 SCP) |
+| NeoForge 1.21.1 mod jar | `<server>/mods/agent-link-neoforge-1.21.1-*-all.jar` | 用户(或 agent 通过 SCP) |
+| Spigot/Paper 1.20+ plugin jar | `<server>/plugins/agent-link-spigot-modern-*.jar` | 用户(或 agent 通过 SCP) |
 | MCP host 配置 | 见 "Step 4" | agent |
 
 不需要 Node、不需要 npm、不需要绝对路径。
 
 ## Step 1 — 拿到 mod jar
 
-**推荐**:从 [GitHub Releases](https://github.com/Nothingness-Void/mc-agent-link/releases) 下载最新 `agent-link-forge-1.20.1-*.jar`,直接扔进 `<server>/mods/`。
+**推荐**:从 [GitHub Releases](https://github.com/Nothingness-Void/mc-agent-link/releases) 下载与服务器加载器匹配的 jar,按加载器放入服务端目录。GitHub 只用于获取 jar；配对阶段不访问 GitHub。若用户无法访问 GitHub,使用已经下载的本地 jar、项目 release-staging/ 产物或在本机按下文构建，不要让 agent 卡在 GitHub 页面。
 
-**自己构建**(需要 JDK 17,严格 17,不是 8 也不是 21):
+- Forge 1.20.1: `agent-link-forge-1.20.1-*.jar`
+- NeoForge 1.21.1: `agent-link-neoforge-1.21.1-*-all.jar`
+
+**自己构建 Forge 1.20.1**(需要 JDK 17,严格 17):
 
 ```bash
 git clone https://github.com/Nothingness-Void/mc-agent-link.git
 cd mc-agent-link/minecraft/forge-mod
-./gradlew shadowJar          # Linux/macOS
-.\gradlew.bat shadowJar      # Windows
+./gradlew build              # Linux/macOS
+.\gradlew.bat build          # Windows
 ```
 
 如果 `JAVA_HOME` 不对:
@@ -46,24 +51,51 @@ $env:JAVA_HOME = "C:\Program Files\Java\jdk-17.0.3.1" # Windows
 
 产物:`minecraft/forge-mod/build/libs/agent-link-forge-1.20.1-*.jar`。拷到用户的 `<server>/mods/`。
 
-## Step 2 — 启动服务器并拿 setup link
+**自己构建 NeoForge 1.21.1**(需要 JDK 21):
+
+```bash
+cd mc-agent-link/minecraft/neoforge-mod
+./gradlew build              # Linux/macOS
+.\gradlew.bat build          # Windows
+```
+
+产物:`minecraft/neoforge-mod/build/libs/agent-link-neoforge-1.21.1-*-all.jar`。NeoForge 服务器不要安装 Forge jar；`-all.jar` 才是包含 Java-WebSocket 依赖的可安装包。
+
+**自己构建 Spigot/Paper 1.20+ 插件**(需要 JDK 17 构建):
+
+```powershell
+cd mc-agent-link/minecraft/spigot-plugin
+$env:JAVA_HOME = "C:\Program Files\Java\jdk-17.0.3.1"
+.\gradlew.bat clean build
+```
+
+默认产物:`minecraft/spigot-plugin/build/libs/agent-link-spigot-modern-0.5.0-alpha.jar`。把它放入服务端 `plugins/`，不要放入 `mods/`，也不需要安装 `mc-agent-link-agent`。Spigot 插件只注册 `/agentlink`，不注册 `/agent`、GUI、游戏内请求队列或 steer；默认端口与基础 Mod 相同(`25580` WebSocket、`25581` MCP HTTP)。配置文件是 `plugins/AgentLink/config.yml`。
+
+要同时编译并验证现代版本 API:
+
+```powershell
+cd mc-agent-link/minecraft/spigot-plugin
+.\build-modern.ps1 -JavaHome "C:\Program Files\Java\jdk-17.0.3.1"
+```
+
+脚本会验证 `1.20.1`、`1.20.6`、`1.21.1`、`1.21.11`，产物放在 `minecraft/spigot-plugin/build/modern-releases/`。默认 `agent-link-spigot-modern-*.jar` 是跨版本安装包。
+
+## Step 2 — 启动服务器并拿本地 setup endpoint
 
 agent 这一步只能让用户做(除非 agent 有控制服务器进程的能力):
 
-> 「请启动你的 Minecraft 服务器,等控制台打出 `agent-link setup link ...` 后,把整条 setup link 发给我。」
+> 「请启动你的 Minecraft 服务器,等控制台打出 `agent-link local setup endpoint ...` 后,把整条本地 URL 发给我。」
 
-setup link 形如:
+新版本形如:
 
 ```text
-https://github.com/Nothingness-Void/mc-agent-link/blob/main/AGENTS.md#agent-link-setup=eyJ2IjoxLCJtY3BfdXJsIjoi...
+http://127.0.0.1:25581/pair/setup/<random-id>
 ```
 
-agent 收到后:
+这是服务端自己提供的 JSON 接口,不依赖 GitHub。agent 收到后:
 
-1. 从 URL fragment 里取出 `agent-link-setup=` 后面的 base64url payload。
-2. base64url 解码成 JSON。
-3. 读取 `pair_url`、`pair_code`、`mcp_url`、`expires_at`。
-4. 在过期前向 `pair_url` 发送:
+1. `GET` 这条 URL,读取返回 JSON 中的 `pair_url`、`pair_code`、`mcp_url`、`expires_at`。
+2. 在过期前向 `pair_url` 发送:
 
 ```http
 POST /pair
@@ -88,17 +120,24 @@ Origin: http://127.0.0.1
 }
 ```
 
-这个 `mcp` 对象就是要写进 MCP host 配置里的 `mcpServers.minecraft`。
+3. 将返回的 `mcp` 对象自动合并进 MCP host 配置的 `mcpServers.minecraft`,保留其他 MCP server。
+4. 重载 MCP host 并按 `whoami`、`ping` 顺序验证。
 
-setup link **10 分钟内一次性有效**。如果 `/pair` 返回 `401`,响应体会包含 `reason`:
+setup endpoint **10 分钟内一次性有效**。配对成功后 token 会持久化,重启服务端不需要重新配对,也不会继续后台刷新链接。需要给第二个 agent 配对时,再运行 `/agentlink pair` 或 `/agentlink pair-guest`。
+
+如果 `/pair` 返回 `401`,响应体会包含 `reason`:
 
 ```json
 {"error":"Invalid or expired pair code","reason":"expired"}
 ```
 
-`reason` 可能是 `unknown`、`expired` 或 `used`。未配对成功前,mod 会每次过期后自动打印新链接。
+`reason` 可能是 `unknown`、`expired` 或 `used`。只有在尚未完成首次配对时,mod 才会在过期后自动打印新的本地 endpoint。
 
-兼容/故障排查时,仍可读 `<server>/config/agent-link.toml` 手动取 token:
+旧版本可能仍打印 GitHub fragment setup link。它仍可兼容使用,但新安装不要求访问 GitHub。
+
+如果启动日志显示 pairing already exists; setup endpoint suppressed,说明已有持久 token，重启后不再自动打印链接是正常的。已有 host 配置应直接继续使用；只有新增 agent 或 host 配置丢失时，才让管理员执行 /agentlink pair 或 /agentlink pair-guest，并把新打印的完整 endpoint 交给 agent。
+
+兼容/故障排查时,仍可读 `<server>/config/agent-link.toml` 手动确认配置，但不要优先要求用户粘贴 raw token:
 
 ```toml
 listen_port = 25580           # WebSocket 端口(给非 MCP 客户端用)
@@ -107,6 +146,7 @@ token = "abcd1234..."
 
 mcp_enabled = true            # MCP HTTP transport
 mcp_listen_port = 25581       # MCP endpoint 端口
+mcp_public_host = "127.0.0.1" # agent 可访问的服务器地址;远程部署时修改
 mcp_allowed_origins = ["null", "http://localhost", "http://127.0.0.1"]
 
 write_allow = ["config/**"]   # 写权限白名单
@@ -249,13 +289,23 @@ write_deny  = ["config/security/**"]   # 即使在 allow 范围内,这里也会�
 
 实际写入时使用 `/pair` 返回的 `mcp` 对象,不要重新手打 token。
 
-如果用户的服务器在另一台机器上:把 `127.0.0.1` 换成那台机器的 IP,**并且**让用户在 `<server>/config/agent-link.toml` 里:
+如果用户的服务器在另一台机器上,不要只把 host 配置里的 127.0.0.1 换成 IP。必须先让服务端生成可达的 setup endpoint。
 
-1. 把 `allow_remote` 改成 `true`(这同时影响 WebSocket 和 MCP HTTP 的 bind 地址)
-2. 把 `mcp_allowed_origins` 收紧到你信任的 client(防 DNS rebinding)
-3. 重启服务器
+Forge/NeoForge 的 `<server>/config/agent-link.toml`:
 
-提醒用户加防火墙规则。
+    allow_remote = true
+    mcp_public_host = "mc.example.com"
+    mcp_allowed_origins = ["null"]
+
+Spigot/Paper 的 `plugins/AgentLink/config.yml`:
+
+    mcp:
+      allow-remote: true
+      public-host: mc.example.com
+      allowed-origins:
+        - "null"
+
+重启后使用控制台打印的新 endpoint。提醒用户只向可信网络开放 MCP 端口，并配置防火墙规则。
 
 ### Claude Code(用户级)
 
@@ -275,9 +325,9 @@ write_deny  = ["config/security/**"]   # 即使在 allow 范围内,这里也会�
 
 ## Step 4 — 验证
 
-agent 让用户在 host 里跑一句:**「ping the minecraft server」**。
+agent 让用户在 host 里跑一句:**「先检查 Minecraft 连接并调用 whoami,然后 ping」**。
 
-预期行为:agent 调用 `ping` 工具,返回 `{"pong": true, "uptime_ms": ...}`。
+预期行为:agent 先调用 `whoami`,再调用 `ping`,返回 `{"pong": true, "uptime_ms": ...}`。
 
 不行的话排查顺序:
 

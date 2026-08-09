@@ -2,26 +2,28 @@
 
 If a user sends you this repository link, help them connect their Minecraft server through `mc-agent-link`.
 
-## Preferred flow: setup link
+## Preferred flow: local setup endpoint
 
-Ask the user for the full `agent-link setup link` printed in the Minecraft server console after installing the Forge mod and starting the server. It looks like:
+Ask the user for the full `agent-link local setup endpoint` printed in the Minecraft server console after installing the mod/plugin and starting the server. It looks like:
 
 ```text
-https://github.com/Nothingness-Void/mc-agent-link/blob/main/AGENTS.md#agent-link-setup=...
+http://127.0.0.1:25581/pair/setup/<random-id>
 ```
 
-Do not ask the user to paste `config/agent-link.toml` or a raw token unless pairing fails.
+This endpoint is served by the Minecraft server itself. It does not require GitHub, a browser, or a manually copied token. Do not ask the user to paste `config/agent-link.toml` or a raw token unless pairing fails.
 
-## What to do with the setup link
+The complete reference is in docs/pairing.md. Use this file as the short, executable runbook when
+the user only provides a setup URL.
 
-1. Extract the URL fragment value after `agent-link-setup=`.
-2. Decode it as base64url JSON. Add padding if your decoder requires it.
-3. Read these fields:
+## What to do with the setup endpoint
+
+1. Send `GET <setup_endpoint>` with `Accept: application/json`.
+2. Read these fields from the returned JSON:
    - `mcp_url`
    - `pair_url`
    - `pair_code`
    - `expires_at`
-4. Before `expires_at`, send:
+3. Before `expires_at`, send:
 
 ```http
 POST <pair_url>
@@ -32,9 +34,35 @@ Origin: http://127.0.0.1
 {"pair_code":"<pair_code>"}
 ```
 
-5. Use the returned `mcp` object as `mcpServers.minecraft` in the user's MCP host config.
-6. Restart or reload the MCP host if needed.
-7. Verify by calling the `ping` tool.
+4. Use the returned `mcp` object as `mcpServers.minecraft` in the user's MCP host config. Merge it with existing servers; never overwrite unrelated entries.
+5. Restart or reload the MCP host if needed.
+6. Verify by calling the `whoami` tool first, then call `ping` before any other Minecraft action.
+
+PowerShell can perform the exchange without GitHub:
+
+    $setup = Invoke-RestMethod -Method Get -Uri '<setup-endpoint>' -Headers @{ Accept = 'application/json' }
+    $body = @{ pair_code = [string]$setup.pair_code } | ConvertTo-Json -Compress
+    $pair = Invoke-RestMethod -Method Post -Uri $setup.pair_url -Headers @{ Accept = 'application/json' } -ContentType 'application/json' -Body $body
+
+Require $setup.kind to be agent-link-pairing and use $pair.mcp exactly as
+mcpServers.minecraft. Never print $pair.mcp.headers.Authorization.
+
+After a successful pairing, the bearer token is persisted by the server and remains valid across server restarts. Do not ask for a new setup endpoint on every restart. If another agent must be paired, ask the operator to run `/agentlink pair` (or `/agentlink pair-guest`) and provide the newly printed local endpoint.
+
+If the startup log says pairing already exists and the setup endpoint is suppressed, this is
+expected. Reuse the existing MCP host configuration. A new agent cannot recover a token from
+`/mcp`; the operator must explicitly run `/agentlink pair` or `/agentlink pair-guest` and send
+the new complete endpoint.
+
+## Legacy GitHub setup link
+
+Older mod/plugin versions print a GitHub-fragment link:
+
+```text
+https://github.com/Nothingness-Void/mc-agent-link/blob/main/AGENTS.md#agent-link-setup=...
+```
+
+If the user provides that legacy form, extract the value after `agent-link-setup=`, decode it as base64url JSON, and continue with the same `pair_url` POST flow. This fallback is retained for compatibility only; never require GitHub for a new installation.
 
 ## In-game approval model
 
@@ -55,9 +83,9 @@ the user.
 If the MCP host (for example Claude Code) shows its own permission prompt first, allow the `minecraft` MCP server/tool there so the request can reach the Minecraft-side approval flow.
 
 If `/pair` returns `401`, read the JSON `reason` field:
-- `expired`: ask the user to send the latest refreshed setup link from the Minecraft server console.
-- `used`: tell the user the setup link was already consumed, possibly by another agent/MCP host, and ask for the latest refreshed setup link if needed.
-- `unknown`: the code is wrong or not recognized; re-check the setup link and ask for a fresh one if pairing still fails.
+- `expired`: ask the user to run `/agentlink pair` and send the newly printed local setup endpoint.
+- `used`: first inspect the existing MCP host config. If it was not saved, ask the user to run `/agentlink pair` for a new endpoint.
+- `unknown`: the code, random path, or pairing state is wrong; do not guess. Ask for a fresh endpoint or ask the operator to run `/agentlink pair`.
 
 ## MCP host config shape
 

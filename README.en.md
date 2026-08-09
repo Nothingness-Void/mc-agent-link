@@ -4,7 +4,21 @@
 
 Lets AI agents (via the [Model Context Protocol](https://modelcontextprotocol.io)) connect to a running Minecraft server. Run commands, query players, stream events, read mods/configs/crash-reports, profile tick spikes, tune `config/*` files — plus **native block writing, NBT read/write, player/entity/world control, and async long-running tasks**. Anything an op could do at the console, an agent can do, and most of it no longer needs `run_console_command`.
 
-> **Status:** early. Forge 1.20.1 server-side first. NeoForge / Fabric / Paper planned.
+> **Status:** early. Forge 1.20.1, NeoForge 1.21.1, and a modern Spigot/Paper 1.20+ base-link plugin are maintained.
+
+## Version support
+
+| Minecraft | Loader | Java | Base mod | Optional in-game addon |
+|---|---|---:|---|---|
+| 1.20.1 | Forge | 17 | `minecraft/forge-mod` | `mc-agent-link-agent` root project |
+| 1.21.1 | NeoForge | 21 | `minecraft/neoforge-mod` | `mc-agent-link-agent/neoforge-mod` |
+| 1.20+ | Spigot/Paper | 17+* | `minecraft/spigot-plugin` | No addon; base link only |
+
+The Forge and NeoForge base mods share the MCP, permission, request-queue, async-task, and addon APIs. Loader entry points, event buses, and network payload layers are adapted separately. Do not mix Forge and NeoForge jars.
+
+The Spigot plugin is an independent implementation. It reuses the agent-link MCP/pairing protocol but does not provide the `mc-agent-link-agent` `/agent` command, GUI, in-game request queue, or steer API. Its default jar is compiled against the lowest common Bukkit 1.20.1 API and targets modern Spigot/Paper 1.20+. See [`minecraft/spigot-plugin/README.en.md`](minecraft/spigot-plugin/README.en.md) for build and install instructions.
+
+*The plugin bytecode targets Java 17; the server JVM requirement still follows Minecraft, with 1.20.5+/1.21 commonly requiring Java 21.
 
 [中文 README](README.md) · [Installation guide for agents](INSTALL.md) · [Wire protocol](docs/protocol.md)
 
@@ -108,7 +122,9 @@ mc-agent-link/
 ├── docs/
 │   └── protocol.md            # agent-link wire protocol spec
 ├── minecraft/
-│   └── forge-mod/             # Forge 1.20.1 mod (Java 17, Gradle)
+│   ├── forge-mod/              # Forge 1.20.1 mod (Java 17, Gradle)
+│   ├── neoforge-mod/           # NeoForge 1.21.1 mod (Java 21, Gradle)
+│   └── spigot-plugin/          # Spigot/Paper 1.20+ plugin (Java 17; base link only)
 ├── packages/
 │   └── mcp-server/            # Node MCP bridge (TypeScript, stdio fallback)
 └── INSTALL.md                 # Step-by-step install guide (designed to be read by an agent)
@@ -116,23 +132,33 @@ mc-agent-link/
 
 ## Quick start
 
+Choose the pair matching the server loader:
+
+- **Forge 1.20.1**: `minecraft/forge-mod` + the root project of `mc-agent-link-agent`
+- **NeoForge 1.21.1**: `minecraft/neoforge-mod` + `mc-agent-link-agent/neoforge-mod`
+- **Spigot/Paper 1.20+**: `minecraft/spigot-plugin`; use `agent-link-spigot-modern-*.jar`, put it in `plugins/`, and do not install `mc-agent-link-agent`
+
 Foolproof path:
 
-1. **Install the mod**: drop `agent-link-forge-1.20.1-*.jar` into your server's `mods/` directory and start the server.
-2. **Copy the setup link**: the console prints an `agent-link setup link (...)` line. It is one-use and valid for 10 minutes; if pairing has not succeeded, the mod refreshes and prints a new link automatically. OPs or the console can also run `/agentlink pair` to generate a new link immediately.
-3. **Send it to your agent**: paste the full setup link into Claude Code / Cursor / your custom agent. The agent exchanges it through `/pair`, writes the MCP host config, then calls `ping` to verify.
+1. **Install the base mod**: drop the jar matching your loader into the server's `mods/` directory and start the server (`agent-link-forge-1.20.1-*.jar` for Forge, or `agent-link-neoforge-1.21.1-*-all.jar` for NeoForge).
+2. **Copy the local setup endpoint**: before the first pairing, the console prints an `agent-link local setup endpoint (...)` line such as `http://127.0.0.1:25581/pair/setup/<random-id>`. The agent GETs this URL directly; GitHub is not required.
+3. **Send it to your agent**: paste the complete local URL into Claude Code / Cursor / your custom agent. The agent GETs/POSTs the pairing data, merges only the returned block into `mcpServers.minecraft`, then calls `whoami` followed by `ping`. The bearer token is persistent, so a server restart does not trigger another setup link. Run `/agentlink pair` or `/agentlink pair-guest` only when pairing another agent.
 
-The setup link looks like this:
+The Spigot/Paper plugin keeps the default `25580` WebSocket and `25581` MCP HTTP ports and stores configuration at `plugins/AgentLink/config.yml`. It registers `/agentlink` only; it does not register `/agent`. In-game agent control requires the matching Forge/NeoForge base mod plus its addon.
+
+Older versions may print this GitHub setup link (compatibility only):
 
 ```text
 https://github.com/Nothingness-Void/mc-agent-link/blob/main/AGENTS.md#agent-link-setup=...
 ```
 
-If the pairing code expires, use the latest refreshed setup link from the console, or run `/agentlink pair` to refresh it manually. If it has already been used, pairing has already succeeded.
+If the local setup endpoint expires, run `/agentlink pair` to generate a new one. If it has already been used, inspect the existing host config first. If the log says pairing already exists; setup endpoint suppressed, that is the expected post-restart state; a new agent requires an operator to run `/agentlink pair` or `/agentlink pair-guest`.
+
+When the server and agent are on different machines, set `allow_remote = true`, `mcp_public_host`, and a trusted `mcp_allowed_origins` for Forge/NeoForge; use `mcp.allow-remote`, `mcp.public-host`, and `mcp.allowed-origins` for Spigot/Paper. See [docs/pairing.md](docs/pairing.md) for the complete flow.
 
 For remote servers, set `allow_remote = true` in `agent-link.toml`, narrow `mcp_allowed_origins` to your trusted clients, restart, and make sure your firewall allows `mcp_listen_port`.
 
-**Older host that doesn't support HTTP transport?** The Node bridge in `packages/mcp-server` still works over stdio + WebSocket — see [INSTALL.md Appendix A](INSTALL.md#附录-a--node-bridgestdio兼容路径). This is the legacy path; new installs should use setup link + HTTP.
+**Older host that doesn't support HTTP transport?** The Node bridge in `packages/mcp-server` still works over stdio + WebSocket — see [INSTALL.md Appendix A](INSTALL.md#附录-a--node-bridgestdio兼容路径). This is the legacy path; new installs should use the local setup endpoint + HTTP.
 
 ## How agents discover what to do
 
@@ -187,9 +213,9 @@ This keeps the base mod focused on generic MCP transport, approval, and request-
 
 ## Roadmap
 
-- [ ] NeoForge implementation
+- [x] NeoForge 1.21.1 implementation
+- [x] Spigot/Paper 1.20+ base-link plugin
 - [ ] Fabric implementation
-- [ ] Paper implementation
 - [ ] Auto-apply patches (currently agents only suggest; users confirm)
 - [ ] CI + unit tests
 

@@ -347,8 +347,8 @@ without importing another mod's private API.
 |---|---|
 | `/agent <text>` | ADMIN or OP: queue an in-game request to the connected agent (provided by `mc-agent-link-agent`) |
 | `/agent status` / `cancel <id>` / `reload` | inspect / cancel / reload addon config |
-| `/agentlink pair` | rotate the one-time MCP setup link as a **CONSOLE** token (skips in-game approval) |
-| `/agentlink pair-guest` | rotate the one-time MCP setup link as a **GUEST** token (always goes through in-game approval) |
+| `/agentlink pair` | generate/reopen a one-time local MCP setup endpoint as a **CONSOLE** token (skips in-game approval) |
+| `/agentlink pair-guest` | generate/reopen a one-time local MCP setup endpoint as a **GUEST** token (always goes through in-game approval) |
 | `/agentlink approve <id>` / `deny <id>` | resolve the chat approval prompt |
 | `/agentlink trust <id>` | add a **whole-tool** rule to `approval.trusted_tools` |
 | `/agentlink trustpattern <id>` | add a **parameter-glob** rule (auto-derived from current call) |

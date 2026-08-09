@@ -110,6 +110,15 @@ tasks.named('assemble') {
     dependsOn 'shadowJar'
 }
 
+// ForgeGradle 6.0.16 exposes the shadow jar as the reobfJar input. Keep the
+// task graph explicit so Gradle 8.8 does not reject the existing packaging
+// arrangement during validation.
+tasks.configureEach {
+    if (name == 'reobfJar') {
+        mustRunAfter 'shadowJar'
+    }
+}
+
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'
     options.release = 17
